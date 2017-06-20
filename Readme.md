@@ -32,11 +32,11 @@ Unofficial documentation is available for Delphi 2005 ([see here](http://pages.c
 
 The first item in a vftable is `vmtSelfPtr`, which points to the start of the 
 virtual function table.  The script scans each code segment in the PE file for
-any location pointing forward +0x4C.  Note that the Delphi compiler aligns
+any location pointing forward `+0x4C` bytes.  Note that the Delphi compiler aligns
 vftables to a 4 byte boundary (for optimisation).
 
-For example, the following VA 0x0046E1C8 contains the offset 0x0046E214, which
-is 0x4C ahead of the current location.
+For example, the following VA `0x0046E1C8` contains the offset `0x0046E214`, which
+is `0x4C` ahead of the current location.
 
     .text:0046E1C8                   ; Classes::TComponent *vftable_TDCP_misty1
     .text:0046E1C8 14 E2 46 00       vftable_TDCP_misty1 dd offset off_46E214
@@ -56,8 +56,6 @@ If both pointers reference the same function it is inherited.  If the child has
 a different pointer then it has been overloaded.
 
 # Example output
-
-
 
     TObject (at 0x0040112c)
     |-- Exception (at 0x004081f8)
@@ -79,7 +77,7 @@ a different pointer then it has been overloaded.
   adjust scanning for different vftable layouts.
 * Parse more class information, e.g. properties (a Delphi specific)
 * Parse Delphi RTTI information (vmtTypeInfo in the vftable)
-* Disassemble code with Capstone and identify virtual calls (e.g. match call [ecx+3Fh] to an instance method)
+* Disassemble code with Capstone and identify virtual calls (e.g. match `call [ecx+3Fh]` to an instance method)
 
 # Caveats
 
