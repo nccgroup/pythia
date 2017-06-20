@@ -1,0 +1,36 @@
+# vim: tabstop=8 expandtab shiftwidth=4 softtabstop=4
+
+profiles:
+    base:
+        # These offsets in the vftable are consistent across
+        # all checked Delphi versions
+        functions:
+            -32: SafeCallException
+            -28: AfterConstruction
+            -24: BeforeDestruction
+            -20: Dispatch
+            -16: DefaultHandler
+            -12: NewInstance
+            -8: FreeInstance
+            -4: Destroy
+
+    delphi2xxx:
+        # How far is it from vmtSelfPtr to the start of user functions?
+        distance: 0x4C
+        # What pointer values should be extracted from the vftable?
+        offsets:
+            -76: vmtSelfPtr
+            -72: vmtIntfTable
+            -68: vmtAutoTable
+            -64: vmtInitTable
+            -60: vmtTypeInfo
+            -56: vmtFieldTable
+            -52: vmtMethodTable
+            -48: vmtDynamicTable
+            -44: vmtClassName
+            -40: vmtInstanceSize
+            -36: vmtParent
+
+options:
+    blah: false
+
