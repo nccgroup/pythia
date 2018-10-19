@@ -13,6 +13,16 @@ An IDAPython script that can load the output into IDA is provided.
 The script was written to complement other tools for reverse engineering
 Delphi.
 
+# Author & license
+
+Released as open source by NCC Group Plc - http://www.nccgroup.com/
+
+Developed by David Cannings (@edeca) david.cannings@nccgroup.com
+
+http://www.github.com/nccgroup/pythia
+
+This project is released under the AGPL license. Please see LICENSE for more information.
+
 # How it works
 
 The high level flow is:
