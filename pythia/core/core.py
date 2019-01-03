@@ -39,3 +39,4 @@ class DelphiParser(object):
                 self.logger.setLevel(logging.INFO)
             elif debug > 1:
                 self.logger.setLevel(logging.DEBUG)
+

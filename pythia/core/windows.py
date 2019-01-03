@@ -1,6 +1,8 @@
 import io
 import struct
 import pefile
+from binascii import hexlify
+from .helpers import LicenseHelper
 from .structures import *
 
 
@@ -105,6 +107,7 @@ class PEHandler(object):
         pe.parse_data_directories(
             directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
         )
+        helper = LicenseHelper()
 
         if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
             self.logger.warning(
@@ -123,9 +126,21 @@ class PEHandler(object):
                     offset = entry.directory.entries[0].data.struct.OffsetToData
                     size = entry.directory.entries[0].data.struct.Size
                     data = pe.get_memory_mapped_image()[offset : offset + size]
-                    self.logger.debug(
-                        "Found Delphi license information in PE resources"
-                    )
+
+                    license = helper.from_bytes(data)
+                    if license:
+                        self.logger.debug(
+                            "Found Delphi %s license information in PE resources", license
+                        )
+                    else:
+                        self.logger.debug(
+                            "Unknown Delphi license %s", hexlify(license)
+                        )
+                    return
+
+        self.logger.warning(
+            "Did not find DVCLAL license information in PE resources"
+        )
 
     def analyse(self):
 
