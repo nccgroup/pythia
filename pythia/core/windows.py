@@ -3,6 +3,7 @@ import struct
 import pefile
 from .structures import *
 
+
 class PEHandler(object):
     """
     The main parser, which takes a filename or pefile object and extracts
@@ -10,13 +11,20 @@ class PEHandler(object):
     much of the code will need splitting out into a separate class.
     """
 
-    # TODO: Support callbacks, which will allow other programs (idapython, 
+    # TODO: Support callbacks, which will allow other programs (idapython,
     #       radare) to use this programatically.  Ideally these should be
     #       passed to the higher level class.
 
     # TODO: Support parsing a single section, if given the data and the
     #       base virtual address.  This will permit usage from within
     #       IDA.
+
+    # TODO: Support processing DVCLAL resource to obtain Delphi version and
+    #       unit information.
+    #       See: https://stackoverflow.com/questions/18720045/what-are-the-list-of-all-possible-values-for-dvclal
+
+    # TODO: Some way of mapping from Construct Struct(..) types to the
+    #       original data, so we can more easily interface with IDA/r2/etc.
 
     _pe = None
     profiles = {
@@ -29,7 +37,7 @@ class PEHandler(object):
             "description": "Delphi (modern)",
             "distance": 0x58,
             "vftable_struct": vftable_modern,
-        }
+        },
     }
     chosen_profile = None
     visited = None
@@ -58,7 +66,7 @@ class PEHandler(object):
         self.candidates = {}
 
         # Initialise empty lists
-        for table in ['typeinfo', 'fieldtable', 'methodtable']:
+        for table in ["typeinfo", "fieldtable", "methodtable"]:
             if reset_visited:
                 self.visited[table] = set()
             self.candidates[table] = set()
@@ -70,14 +78,14 @@ class PEHandler(object):
         """
         self._pe = pe
         self._mapped_data = self._pe.get_memory_mapped_image()
-        self.logger.debug(
-            "size of mapped data is: {}".format(len(self._mapped_data)))
+        self.logger.debug("size of mapped data is: {}".format(len(self._mapped_data)))
 
         # TODO: Validate 32bit.  Need to find 64bit samples to add parsing.
+        self._extract_access_license(pe)
 
         self.logger.debug(
-            "ImageBase is: 0x{:08x}".format(
-                self._pe.OPTIONAL_HEADER.ImageBase))
+            "ImageBase is: 0x{:08x}".format(self._pe.OPTIONAL_HEADER.ImageBase)
+        )
 
     def _from_file(self, filename):
         """
@@ -88,6 +96,36 @@ class PEHandler(object):
         pe = pefile.PE(filename, fast_load=True)
         self._from_pefile(pe)
         self.logger.info("Loaded PE from file {}".format(filename))
+
+    def _extract_access_license(self, pe):
+        """
+        Extract information from the DVCLAL resource.
+        """
+
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
+        )
+
+        if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
+            self.logger.warning(
+                "This executable has no resources, expected DVCLAL license information"
+            )
+            return
+
+        for directory in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+
+            if directory.id != pefile.RESOURCE_TYPE["RT_RCDATA"]:
+                continue
+
+            for entry in directory.directory.entries:
+                if str(entry.name) == "DVCLAL":
+                    # TODO: Move this to a generic function (also useful for PACKAGEINFO later)
+                    offset = entry.directory.entries[0].data.struct.OffsetToData
+                    size = entry.directory.entries[0].data.struct.Size
+                    data = pe.get_memory_mapped_image()[offset : offset + size]
+                    self.logger.debug(
+                        "Found Delphi license information in PE resources"
+                    )
 
     def analyse(self):
 
@@ -106,18 +144,17 @@ class PEHandler(object):
                     found = True
                 else:
                     self.logger.warning(
-                        "Have already found objects in a different section!")
+                        "Have already found objects in a different section!"
+                    )
                     raise Exception("Objects in more than one section")
 
                 # Step 2 - add item references from vftables
                 for offset, data in vftables.items():
-                    if data['vmtFieldTable']:
-                        self._add_candidate(
-                            data['vmtFieldTable'], 'fieldtable')
+                    if data["vmtFieldTable"]:
+                        self._add_candidate(data["vmtFieldTable"], "fieldtable")
 
-                    if data['vmtMethodTable']:
-                        self._add_candidate(
-                            data['vmtMethodTable'], 'methodtable')
+                    if data["vmtMethodTable"]:
+                        self._add_candidate(data["vmtMethodTable"], "methodtable")
 
                 # Step 3 - iterate through all items repeatedly
                 passes = 0
@@ -125,10 +162,14 @@ class PEHandler(object):
                     found = 0
                     passes += 1
 
-                    self.logger.info("Extracting additional data, pass {}".format(passes))
+                    self.logger.info(
+                        "Extracting additional data, pass {}".format(passes)
+                    )
 
                     if passes > 16:
-                        self.logger.error("Too many passes, aborting.  Please report this error")
+                        self.logger.error(
+                            "Too many passes, aborting.  Please report this error"
+                        )
                         break
 
                     # Can't update items whilst iterating, so take a local copy
@@ -145,11 +186,12 @@ class PEHandler(object):
                     if found == 0:
                         break
 
-            #self._parse_extra(s, vftables)
+            # self._parse_extra(s, vftables)
 
         if not self.chosen_profile:
             self.logger.error(
-                "Didn't find any vftables.  Either this isn't Delphi, it doesn't use object orientation, or this is a bug.")
+                "Didn't find any vftables.  Either this isn't Delphi, it doesn't use object orientation, or this is a bug."
+            )
             return
 
         # TODO: Ensure the top class is always TObject, or warn
@@ -168,13 +210,13 @@ class PEHandler(object):
     def _parse_typeinfo(self, section, va):
         self.logger.debug("found typeinfo at 0x{:08x}".format(va))
 
-        start = va - section['base_va']
-        section['data'].seek(start)
-        table = typeinfo.parse_stream(section['data'])
+        start = va - section["base_va"]
+        section["data"].seek(start)
+        table = typeinfo.parse_stream(section["data"])
         self.logger.debug(table)
 
         # Process references to parent or linked typeinfo structures
-        for ref in ['TypeinfoPtr', 'ParentPtr']:
+        for ref in ["TypeinfoPtr", "ParentPtr"]:
             if hasattr(table.Data, ref):
                 ptr = getattr(table.Data, ref)
 
@@ -182,39 +224,39 @@ class PEHandler(object):
                 # that is not actually a PPTypeInfo
                 if self._in_section(section, ptr):
                     typeinfo_va = self._deref_pp(section, ptr)
-                    self._add_candidate(typeinfo_va, 'typeinfo')
+                    self._add_candidate(typeinfo_va, "typeinfo")
 
         if table.Type == types.tkDynArray:
-            for ref in ['ElementTypePtr', 'ElementType2Ptr', 'unk5']:
+            for ref in ["ElementTypePtr", "ElementType2Ptr", "unk5"]:
                 ptr = getattr(table.Data, ref)
 
                 if self._in_section(section, ptr):
                     typeinfo_va = self._deref_pp(section, ptr)
-                    self._add_candidate(typeinfo_va, 'typeinfo')
+                    self._add_candidate(typeinfo_va, "typeinfo")
                 else:
-                    self.logger.debug("ptr {} to 0x{:08x} is not in this section".format(ref, ptr))
-
+                    self.logger.debug(
+                        "ptr {} to 0x{:08x} is not in this section".format(ref, ptr)
+                    )
 
     def _deref_pp(self, section, va):
         """
         Follow a pointer and TODO
         """
         ptr_offset = self._va_to_offset(section, va)
-        section['data'].seek(ptr_offset)
-        (value,) = self._unpack_stream("I", section['data'])
+        section["data"].seek(ptr_offset)
+        (value,) = self._unpack_stream("I", section["data"])
         return value
 
     def _va_to_offset(self, section, va):
-        return va - section['base_va']
+        return va - section["base_va"]
 
     def _parse_methodtable(self, section, va):
 
-        self.logger.debug(
-            "found *method table at 0x{:08x}".format(va))
+        self.logger.debug("found *method table at 0x{:08x}".format(va))
 
         start = self._va_to_offset(section, va)
-        section['data'].seek(start)
-        table = method_table.parse_stream(section['data'])
+        section["data"].seek(start)
+        table = method_table.parse_stream(section["data"])
 
         self.logger.debug(table)
 
@@ -241,9 +283,9 @@ class PEHandler(object):
             self.logger.debug("field types pointer: %08x", table.Legacy.FieldtypesPtr)
 
             # TODO: Refactor using _deref_pp
-            types_offset = table.Legacy.FieldtypesPtr - section['base_va']
-            section['data'].seek(types_offset)
-            types_table = fieldtypes_table.parse_stream(section['data'])
+            types_offset = table.Legacy.FieldtypesPtr - section["base_va"]
+            section["data"].seek(types_offset)
+            types_table = fieldtypes_table.parse_stream(section["data"])
 
             self.logger.debug(types_table)
             for entry in types_table.Entries:
@@ -272,30 +314,39 @@ class PEHandler(object):
 
         # Check each code segment to see if it has the code flag
         for section in self._pe.sections:
-            if section.Characteristics & pefile.SECTION_CHARACTERISTICS['IMAGE_SCN_CNT_CODE']:
+            if (
+                section.Characteristics
+                & pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_CODE"]
+            ):
 
                 # pefile doesn't remove the null padding, trim any whitespace
                 # TODO: Consider whether removing non-printable would be better
                 name = section.Name
-                name = name.rstrip(b" \r\n\0").decode('ascii')
+                name = name.rstrip(b" \r\n\0").decode("ascii")
 
                 raw_offset = section.PointerToRawData
                 size = section.SizeOfRawData
                 base = section.VirtualAddress
 
                 base_va = self._pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress
-                data = io.BytesIO(self._mapped_data[base:base + size])
+                data = io.BytesIO(self._mapped_data[base : base + size])
 
                 self.logger.debug(
                     "Found section {}, raw offset 0x{:08x}, size: 0x{:08x}, base VA: 0x{:08x}".format(
-                        name, raw_offset, size, base_va))
+                        name, raw_offset, size, base_va
+                    )
+                )
 
-                sections.append({'name': name,
-                                 'base': base,
-                                 'data': data,
-                                 'raw_offset': section.PointerToRawData,
-                                 'size': size,
-                                 'base_va': base_va})
+                sections.append(
+                    {
+                        "name": name,
+                        "base": base,
+                        "data": data,
+                        "raw_offset": section.PointerToRawData,
+                        "size": size,
+                        "base_va": base_va,
+                    }
+                )
 
         return sections
 
@@ -303,7 +354,7 @@ class PEHandler(object):
 
     def _extract_pascal_string(self, stream, offset):
         stream.seek(offset)
-        (length,) = self._unpack_stream('B', stream)
+        (length,) = self._unpack_stream("B", stream)
         stream.seek(offset)
         (text,) = self._unpack_stream("{}p".format(length + 1), stream)
         return text
@@ -317,8 +368,7 @@ class PEHandler(object):
         if not va:
             return False
 
-        if va < section['base_va'] or va > section['base_va'] + \
-                section['size']:
+        if va < section["base_va"] or va > section["base_va"] + section["size"]:
             return False
 
         return True
@@ -337,13 +387,12 @@ class PEHandler(object):
 
         for va, v in vftables.items():
 
-
-            start = v['vmtIntfTable']
+            start = v["vmtIntfTable"]
             if start:
                 self.logger.debug("found intftable at 0x{:08x}".format(start))
 
-                start -= section['base_va']
-                blah = interface_table.parse(section['mmap'][start:])
+                start -= section["base_va"]
+                blah = interface_table.parse(section["mmap"][start:])
 
                 # TODO: Refactor
                 for e in blah.entries:
@@ -353,9 +402,10 @@ class PEHandler(object):
                         guid.Data2,
                         guid.Data3,
                         guid.Data4,
-                        guid.Data5]
+                        guid.Data5,
+                    ]
                     human_guid = "-".join([hexlify(d) for d in fields])
-                    #self.logger.debug("*GUID: {}".format(human_guid))
+                    # self.logger.debug("*GUID: {}".format(human_guid))
 
                 # self.logger.debug(blah)
 
@@ -364,8 +414,8 @@ class PEHandler(object):
         Validate and extract a vftable from a specific offset.
         """
 
-        section['data'].seek(offset)
-        data = structure.parse_stream(section['data'])
+        section["data"].seek(offset)
+        data = structure.parse_stream(section["data"])
         # self.logger.debug(data)
 
         # A number of checks to ensure our brute force method has found a valid
@@ -387,14 +437,14 @@ class PEHandler(object):
                     return None
 
         # Check the instantiated size is not more than 500Kib
-        if data['vmtInstanceSize'] > 1024 * 500:
+        if data["vmtInstanceSize"] > 1024 * 500:
             self.logger.debug("Improbably large vmtInstanceSize")
             return None
 
         # Extract the class name
-        name_offset = data['vmtClassName'] - section['base_va']
-        name = self._extract_pascal_string(section['data'], name_offset)
-        #self.logger.debug("Name: {}".format(name))
+        name_offset = data["vmtClassName"] - section["base_va"]
+        name = self._extract_pascal_string(section["data"], name_offset)
+        # self.logger.debug("Name: {}".format(name))
 
         # TODO: Parse additional class functions
         # TODO: Turn into a vftable object
@@ -413,19 +463,18 @@ class PEHandler(object):
             i = 0
             candidates = 0
 
-            while i < section['size'] - profile['distance']:
+            while i < section["size"] - profile["distance"]:
                 fail = False
-                section['data'].seek(i)
-                (ptr,) = self._unpack_stream('I', section['data'])
+                section["data"].seek(i)
+                (ptr,) = self._unpack_stream("I", section["data"])
 
                 # Calculate the virtual address of this location
-                va = section['base_va'] + i
+                va = section["base_va"] + i
 
-                if (va + profile['distance']) == ptr:
-                    #self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
+                if (va + profile["distance"]) == ptr:
+                    # self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
 
-                    tmp = self._validate_vftable(
-                        section, i, profile['vftable_struct'])
+                    tmp = self._validate_vftable(section, i, profile["vftable_struct"])
                     if tmp:
                         vftables[va] = tmp
                         candidates += 1
@@ -440,15 +489,19 @@ class PEHandler(object):
             if candidates > 0:
                 if self.chosen_profile:
                     self.logger.error(
-                        "Found more than one matching profile.  Please specify one on the commandline to continue.")
+                        "Found more than one matching profile.  Please specify one on the commandline to continue."
+                    )
                     self.logger.error(profiles)
                     sys.exit(1)
                 else:
                     self.chosen_profile = self.profiles[name]
 
         if self.chosen_profile:
-            self.logger.info("Found {} vftables in section {} using profile {}".format(
-                len(vftables), section['name'], self.chosen_profile['description']))
+            self.logger.info(
+                "Found {} vftables in section {} using profile {}".format(
+                    len(vftables), section["name"], self.chosen_profile["description"]
+                )
+            )
 
         # TODO: If we don't find a profile, scan the section manually
         #       for any presence of \x07TOBJECT.

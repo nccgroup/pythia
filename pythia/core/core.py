@@ -1,6 +1,7 @@
 import logging
 from .windows import PEHandler
 
+
 class DelphiParser(object):
 
     handler = None
@@ -32,7 +33,7 @@ class DelphiParser(object):
             self.logger = logger
         else:
             logging.basicConfig(level=logging.ERROR)
-            self.logger = logging.getLogger('pythia')
+            self.logger = logging.getLogger("pythia")
 
             if debug == 1:
                 self.logger.setLevel(logging.INFO)
