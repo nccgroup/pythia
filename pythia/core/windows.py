@@ -21,10 +21,6 @@ class PEHandler(object):
     #       base virtual address.  This will permit usage from within
     #       IDA.
 
-    # TODO: Support processing DVCLAL resource to obtain Delphi version and
-    #       unit information.
-    #       See: https://stackoverflow.com/questions/18720045/what-are-the-list-of-all-possible-values-for-dvclal
-
     # TODO: Some way of mapping from Construct Struct(..) types to the
     #       original data, so we can more easily interface with IDA/r2/etc.
 
@@ -136,7 +132,17 @@ class PEHandler(object):
                         self.logger.debug(
                             "Unknown Delphi license %s", hexlify(license)
                         )
-                    return
+                    #return
+
+                elif str(entry.name) == "PACKAGEINFO":
+                    offset = entry.directory.entries[0].data.struct.OffsetToData
+                    size = entry.directory.entries[0].data.struct.Size
+                    data = pe.get_memory_mapped_image()[offset : offset + size]
+                    self.logger.debug(hexlify(data))
+                    info = packageinfo.parse(data)
+                    self.logger.debug(info)
+
+                    # Docs for TPackageInfoHeader at https://github.com/Fr0sT-Brutal/Delphi_MiniRTL/blob/master/SysUtils.pas#L20087
 
         self.logger.warning(
             "Did not find DVCLAL license information in PE resources"

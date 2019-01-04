@@ -63,6 +63,25 @@ float_type = Enum(Byte,
                   ftCurr=4,
                   )
 
+package_name = Struct(
+    "HashCode" / Int8ul,
+    "Name" / CString("ascii"),
+)
+
+unit_name = Struct(
+    "Flags" / Int8ul,
+    "HashCode" / Int8ul,
+    "Name" / CString("ascii"),
+)
+
+packageinfo = Struct(
+    "Flags" / Int32ul,
+    "RequiresCount" / Int32ul,
+    "Requires" / Array(this.RequiresCount, package_name),
+    "ContainsCount" / Int32ul,
+    "Contains" / Array(this.ContainsCount, unit_name),
+)
+
 guid = Struct(
     "Data1" / Bytes(4),
     "Data2" / Bytes(2),
