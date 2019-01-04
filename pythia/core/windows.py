@@ -1,9 +1,47 @@
 import io
+import logging
 import struct
 import pefile
 from binascii import hexlify
-from .helpers import LicenseHelper
+from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
+
+class PEHelper(object):
+    """
+    A very basic OO wrapper around pefile, making it easier to obtain data
+    without repeating code.
+    """
+
+    def __init__(self, pe):
+        self._pe = pe
+        self.logger = logging.getLogger("pehelper")
+
+    def get_resource_data(self, resource_type, resource_name):
+
+        pe = self._pe
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
+        )
+
+        if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
+            self.logger.warning(
+                "This executable has no resources, expected DVCLAL license information"
+            )
+            return
+
+        for directory in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+
+            if directory.id != resource_type:
+                continue
+
+            for entry in directory.directory.entries:
+                if str(entry.name) == resource_name:
+                    offset = entry.directory.entries[0].data.struct.OffsetToData
+                    size = entry.directory.entries[0].data.struct.Size
+                    data = pe.get_memory_mapped_image()[offset : offset + size]
+                    return data
+
+        return None
 
 
 class PEHandler(object):
@@ -75,11 +113,13 @@ class PEHandler(object):
         script has already created the object.
         """
         self._pe = pe
+        self._pehelper = PEHelper(pe)
         self._mapped_data = self._pe.get_memory_mapped_image()
         self.logger.debug("size of mapped data is: {}".format(len(self._mapped_data)))
 
         # TODO: Validate 32bit.  Need to find 64bit samples to add parsing.
         self._extract_access_license(pe)
+        self._extract_packageinfo(pe)
 
         self.logger.debug(
             "ImageBase is: 0x{:08x}".format(self._pe.OPTIONAL_HEADER.ImageBase)
@@ -100,53 +140,44 @@ class PEHandler(object):
         Extract information from the DVCLAL resource.
         """
 
-        pe.parse_data_directories(
-            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
-        )
         helper = LicenseHelper()
+        resource_type = pefile.RESOURCE_TYPE["RT_RCDATA"]
+        data = self._pehelper.get_resource_data(resource_type, "DVCLAL")
 
-        if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
+        if data:
+            license = helper.from_bytes(data)
+            if license:
+                self.logger.debug(
+                    "Found Delphi %s license information in PE resources", license
+                )
+            else:
+                self.logger.debug(
+                    "Unknown Delphi license %s", hexlify(license)
+                )
+
+        else:
             self.logger.warning(
-                "This executable has no resources, expected DVCLAL license information"
+                "Did not find DVCLAL license information in PE resources"
             )
-            return
 
-        for directory in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+    def _extract_packageinfo(self, pe):
+        """
+        Extract information about what units this executable contains.
+        """
 
-            if directory.id != pefile.RESOURCE_TYPE["RT_RCDATA"]:
-                continue
+        helper = PackageInfoHelper()
+        resource_type = pefile.RESOURCE_TYPE["RT_RCDATA"]
+        data = self._pehelper.get_resource_data(resource_type, "PACKAGEINFO")
 
-            for entry in directory.directory.entries:
-                if str(entry.name) == "DVCLAL":
-                    # TODO: Move this to a generic function (also useful for PACKAGEINFO later)
-                    offset = entry.directory.entries[0].data.struct.OffsetToData
-                    size = entry.directory.entries[0].data.struct.Size
-                    data = pe.get_memory_mapped_image()[offset : offset + size]
+        if data:
+            # TODO: Get the output and do something with it
+            helper.from_bytes(data)
 
-                    license = helper.from_bytes(data)
-                    if license:
-                        self.logger.debug(
-                            "Found Delphi %s license information in PE resources", license
-                        )
-                    else:
-                        self.logger.debug(
-                            "Unknown Delphi license %s", hexlify(license)
-                        )
-                    #return
+        else:
+            self.logger.warning(
+                "Did not find PACKAGEINFO DVCLAL license information in PE resources"
+            )
 
-                elif str(entry.name) == "PACKAGEINFO":
-                    offset = entry.directory.entries[0].data.struct.OffsetToData
-                    size = entry.directory.entries[0].data.struct.Size
-                    data = pe.get_memory_mapped_image()[offset : offset + size]
-                    self.logger.debug(hexlify(data))
-                    info = packageinfo.parse(data)
-                    self.logger.debug(info)
-
-                    # Docs for TPackageInfoHeader at https://github.com/Fr0sT-Brutal/Delphi_MiniRTL/blob/master/SysUtils.pas#L20087
-
-        self.logger.warning(
-            "Did not find DVCLAL license information in PE resources"
-        )
 
     def analyse(self):
 

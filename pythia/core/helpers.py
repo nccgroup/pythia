@@ -1,8 +1,9 @@
 """
 Various helpers to provide utility functions which can also be used from other code.
 """
+import logging
 from binascii import unhexlify
-
+from .structures import packageinfo
 
 class LicenseHelper(object):
     """
@@ -30,3 +31,27 @@ class LicenseHelper(object):
                 return version
 
         return None
+
+
+class PackageInfoHelper(object):
+    """
+    Utility class to parse PACKAGEINFO data to a list of required & contained
+    units.
+    """
+    def __init__(self):
+        # TODO: Move to a static function that can be called from anywhere
+        self.logger = logging.getLogger("pythia.{}".format(self.__class__.__name__))
+
+
+    # TODO: This should return a collection of objects, e.g. PackageInfo for both
+    #       required and contained units.
+    def from_bytes(self, data):
+        """
+        Convert a stream of bytes to a dictionary representation of the
+        structure.
+        """
+
+        # Docs for TPackageInfoHeader at:
+        # https://github.com/Fr0sT-Brutal/Delphi_MiniRTL/blob/master/SysUtils.pas#L20087
+        info = packageinfo.parse(data)
+        self.logger.debug(info)
