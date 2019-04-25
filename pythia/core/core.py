@@ -11,7 +11,13 @@ class DelphiParser(object):
     def __init__(self, filename=None, pe=None, logger=None, debug=0):
         self._init_logging(logger, debug)
 
-        # TODO: Sanity check the input filename or PE file.
+        # TODO: Sanity check the input filename or PE file & exception handling
+        #       for pefile
+
+        # TODO: Take a data buffer (or pefile) and mode, e.g.:
+        #       -> pefile
+        #       -> raw file
+        #       -> raw section (user provides base VA etc.)
 
         if filename:
             # TODO: Auto detect input file type and use the right handler

@@ -6,6 +6,23 @@ from binascii import hexlify
 from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
 
+from plum import unpack_from
+from plum.structure import Structure, member
+from plum.int.little import UInt32
+
+class Vftable(Structure):
+    vmtSelfPtr: UInt32
+    vmtIntfTable: UInt32
+    vmtAutoTable: UInt32
+    vmtInitTable: UInt32
+    vmtTypeInfo: UInt32
+    vmtFieldTable: UInt32
+    vmtMethodTable: UInt32
+    vmtDynamicTable: UInt32
+    vmtClassName: UInt32
+    vmtInstanceSize: UInt32
+    vmtParent: UInt32
+
 class PEHelper(object):
     """
     A very basic OO wrapper around pefile, making it easier to obtain data
@@ -374,6 +391,7 @@ class PEHandler(object):
                 # pefile doesn't remove the null padding, trim any whitespace
                 # TODO: Consider whether removing non-printable would be better
                 name = section.Name
+                # TODO: Catch decoding exceptions
                 name = name.rstrip(b" \r\n\0").decode("ascii")
 
                 raw_offset = section.PointerToRawData
@@ -465,6 +483,14 @@ class PEHandler(object):
         """
         Validate and extract a vftable from a specific offset.
         """
+
+        obj = unpack_from(Vftable, section["data"])
+        self.logger.debug(obj)
+        import plum
+        dump = plum.dump(obj)
+
+        if isinstance(obj, plum.PlumType):
+            self.logger.debug("yeah it's a plum type")
 
         section["data"].seek(offset)
         data = structure.parse_stream(section["data"])
