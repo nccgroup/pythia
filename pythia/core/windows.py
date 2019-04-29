@@ -484,13 +484,8 @@ class PEHandler(object):
         Validate and extract a vftable from a specific offset.
         """
 
-        obj = unpack_from(Vftable, section["data"])
-        self.logger.debug(obj)
-        import plum
-        dump = plum.dump(obj)
-
-        if isinstance(obj, plum.PlumType):
-            self.logger.debug("yeah it's a plum type")
+        from pythia.core.objects import Vftable
+        obj = Vftable(section["data"], offset)
 
         section["data"].seek(offset)
         data = structure.parse_stream(section["data"])
