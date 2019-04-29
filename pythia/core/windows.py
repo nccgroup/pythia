@@ -6,22 +6,6 @@ from binascii import hexlify
 from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
 
-from plum import unpack_from
-from plum.structure import Structure, member
-from plum.int.little import UInt32
-
-class Vftable(Structure):
-    vmtSelfPtr: UInt32
-    vmtIntfTable: UInt32
-    vmtAutoTable: UInt32
-    vmtInitTable: UInt32
-    vmtTypeInfo: UInt32
-    vmtFieldTable: UInt32
-    vmtMethodTable: UInt32
-    vmtDynamicTable: UInt32
-    vmtClassName: UInt32
-    vmtInstanceSize: UInt32
-    vmtParent: UInt32
 
 class PEHelper(object):
     """
