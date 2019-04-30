@@ -1,17 +1,67 @@
+import io
+import logging
+from collections import OrderedDict
 from struct import unpack, calcsize
+
 
 class ValidationError(Exception):
     pass
 
 
 class Section:
-    # TODO: Needs a start, end, name
-    pass
+
+    # Where was this section in the original PE file?
+    file_offset = None
+    # The virtual address, from PE headers
+    virtual_address = None
+    # Where in memory would this section be loaded?
+    load_address = None
+    name = None
+    data = None
+    size = None
+
+    def __init__(self, virtual_address, size, data):
+        self.virtual_address = virtual_address
+        self.size = size
+        self.data = data
+
+    def contains_va(self, va):
+        """
+        Check whether this section contains a given virtual address.
+
+        For example, a section at 0x00400000 of length 0x00001000 contains 0x00410010.
+
+        :param va: Virtual address to check
+        :return: True if the VA is within the section, or False
+        """
+        if va > self.load_address and va < self.load_address + self.size:
+            return True
+
+        return False
 
 
-class Base:
+class PESection(Section):
 
-    def __init__(self, stream, start=None):
+    # TODO: Consider taking an optional data argument if the image has previously been
+    #       memory mapped?
+    def __init__(self, section):
+        self._section = section
+        self.load_address = self._section.pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress
+
+        # Map the data and keep only the relevant parts
+        mapped_data = self._section.pe.get_memory_mapped_image()
+        data = io.BytesIO(mapped_data[section.VirtualAddress : section.VirtualAddress + section.SizeOfRawData])
+
+        # pefile doesn't remove the null padding, trim any whitespace
+        # TODO: Handle decoding exceptions
+        self.name = section.Name.rstrip(b" \r\n\0").decode("ascii")
+
+        super().__init__(section.VirtualAddress, section.SizeOfRawData, data)
+
+
+class BaseParser:
+
+    def __init__(self, stream, section, start=None):
         """
 
         :param stream:
@@ -19,12 +69,16 @@ class Base:
         :return:
         """
 
-        self.fields = []
+        # TODO: Initialise a logger with the module name
+
+        # TODO: Fields could be an OrderedDict?
+        self.fields = OrderedDict()
         self.stream = stream
+        self.section = section
         self.start = start
         self.offset = start
 
-    def get_fields(self, format, names):
+    def parse_fields(self, format, names):
 
         # TODO: Take an optional start position - right now this assumes all reads are from the last position
 
@@ -55,19 +109,18 @@ class Base:
             i += 1
 
     def add_field(self, name, data, data_type):
-        # TODO: Add offset & potentially length?
-        field = { 'name': name, 'data': data, 'type': data_type }
-        print(field)
-        self.fields.append(field)
+        # TODO: Add offset & length
+        data = { 'data': data, 'type': data_type }
+        self.fields[name] = data
 
     # TODO: dump() method
     # TODO: pack() method to repack into bytes
 
 
-class Vftable(Base):
+class Vftable(BaseParser):
 
-    def __init__(self, stream, offset=None):
-        super().__init__(stream, offset)
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
         self.parse()
 
     def parse(self):
@@ -85,4 +138,43 @@ class Vftable(Base):
             "vmtParent",
         ]
 
-        self.get_fields("IIIIIIIIIII", common)
+        self.parse_fields("IIIIIIIIIII", common)
+
+        # A number of checks to ensure our brute force method has found a valid
+        # vftable.  Note that legitimate code produced by the Delphi compiler
+        # will often include unrelated sequences of bytes which aren't vftables
+        # but pass basic checks.  Therefore this should be robust enough to
+        # reject them.
+        self._validate_headers()
+
+        # Extract the class name
+        #name_offset = data["vmtClassName"] - section["base_va"]
+        #name = self._extract_pascal_string(section["data"], name_offset)
+        # self.logger.debug("Name: {}".format(name))
+
+        # TODO: Extract the class name from vmtClassName pointer
+        # TODO: Parse additional class functions
+
+    def _validate_headers(self):
+        """
+        Validate that all pointers are within the code section.  This
+        removes a lot of incorrect detections from the brute force search.
+
+        Instance size is not a pointer, self pointer has already been
+        validated.
+
+        :raises: ValidationError if there are problems
+        :return: True if validation is successful
+        """
+
+        ignore = ["vmtInstanceSize", "vmtSelfPtr"]
+
+        for name,info in self.fields.items():
+            if name.startswith("vmt") and name not in ignore:
+                if info['data'] and not self.section.contains_va(info['data']):
+                    raise ValidationError("Field {} data points outside the code section".format(name))
+
+        if self.fields["vmtInstanceSize"]["data"] > 1024 * 500:
+            raise ValidationError("Improbably large vmtInstanceSize {}".format(self.fields["vmtInstanceSize"]["data"]))
+
+        return True

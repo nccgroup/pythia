@@ -5,6 +5,7 @@ import pefile
 from binascii import hexlify
 from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
+from .objects import PESection, Vftable, ValidationError
 
 
 class PEHelper(object):
@@ -371,36 +372,7 @@ class PEHandler(object):
                 section.Characteristics
                 & pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_CODE"]
             ):
-
-                # pefile doesn't remove the null padding, trim any whitespace
-                # TODO: Consider whether removing non-printable would be better
-                name = section.Name
-                # TODO: Catch decoding exceptions
-                name = name.rstrip(b" \r\n\0").decode("ascii")
-
-                raw_offset = section.PointerToRawData
-                size = section.SizeOfRawData
-                base = section.VirtualAddress
-
-                base_va = self._pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress
-                data = io.BytesIO(self._mapped_data[base : base + size])
-
-                self.logger.debug(
-                    "Found section {}, raw offset 0x{:08x}, size: 0x{:08x}, base VA: 0x{:08x}".format(
-                        name, raw_offset, size, base_va
-                    )
-                )
-
-                sections.append(
-                    {
-                        "name": name,
-                        "base": base,
-                        "data": data,
-                        "raw_offset": section.PointerToRawData,
-                        "size": size,
-                        "base_va": base_va,
-                    }
-                )
+                sections.append(PESection(section))
 
         return sections
 
@@ -468,45 +440,15 @@ class PEHandler(object):
         Validate and extract a vftable from a specific offset.
         """
 
-        from pythia.core.objects import Vftable
-        obj = Vftable(section["data"], offset)
+        section.data.seek(offset)
 
-        section["data"].seek(offset)
-        data = structure.parse_stream(section["data"])
-        # self.logger.debug(data)
+        try:
+            obj = Vftable(section.data, section, offset)
+        except ValidationError:
+            # TODO: Log the message at high verbosity levels
+            pass
 
-        # A number of checks to ensure our brute force method has found a valid
-        # vftable.  Note that legitimate code produced by the Delphi compiler
-        # will often include unrelated sequences of bytes which aren't vftables
-        # but pass basic checks.  Therefore this should be robust enough to
-        # reject them.
-
-        # Validate that all pointers are within the code section.  This
-        # removes a lot of incorrect detections from the brute force search.
-        #
-        # Instance size is not a pointer, self pointer has already been
-        # validated.
-        ignore = ["vmtInstanceSize", "vmtSelfPtr"]
-
-        for name, value in data.items():
-            if name.startswith("vmt") and name not in ignore:
-                if value and not self._in_section(section, value):
-                    return None
-
-        # Check the instantiated size is not more than 500Kib
-        if data["vmtInstanceSize"] > 1024 * 500:
-            self.logger.debug("Improbably large vmtInstanceSize")
-            return None
-
-        # Extract the class name
-        name_offset = data["vmtClassName"] - section["base_va"]
-        name = self._extract_pascal_string(section["data"], name_offset)
-        # self.logger.debug("Name: {}".format(name))
-
-        # TODO: Parse additional class functions
-        # TODO: Turn into a vftable object
-
-        return data
+        # TODO: Return something :)
 
     def _find_vftables(self, section):
         """
@@ -520,16 +462,16 @@ class PEHandler(object):
             i = 0
             candidates = 0
 
-            while i < section["size"] - profile["distance"]:
+            while i < section.size - profile["distance"]:
                 fail = False
-                section["data"].seek(i)
-                (ptr,) = self._unpack_stream("I", section["data"])
+                section.data.seek(i)
+                (ptr,) = self._unpack_stream("I", section.data)
 
                 # Calculate the virtual address of this location
-                va = section["base_va"] + i
+                va = section.load_address + i
 
                 if (va + profile["distance"]) == ptr:
-                    # self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
+                    self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
 
                     tmp = self._validate_vftable(section, i, profile["vftable_struct"])
                     if tmp:
