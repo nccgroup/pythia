@@ -6,6 +6,7 @@ from binascii import hexlify
 from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
 from .objects import PESection, Vftable, ValidationError
+from .utils import unpack_stream
 
 
 class PEHelper(object):
@@ -61,28 +62,27 @@ class PEHandler(object):
     #       base virtual address.  This will permit usage from within
     #       IDA.
 
-    # TODO: Some way of mapping from Construct Struct(..) types to the
-    #       original data, so we can more easily interface with IDA/r2/etc.
-
     _pe = None
     profiles = {
         "delphi_legacy": {
             "description": "Delphi (legacy)",
             "distance": 0x4C,
-            "vftable_struct": vftable_legacy,
+            #"vftable_struct": vftable_legacy,
         },
         "delphi_modern": {
             "description": "Delphi (modern)",
             "distance": 0x58,
-            "vftable_struct": vftable_modern,
+            #"vftable_struct": vftable_modern,
         },
     }
     chosen_profile = None
-    visited = None
-    candidates = None
+    visited = None  # TODO: Is this required?
+    candidates = None  # TODO: Is this required?
+    results = None
 
-    def __init__(self, logger, filename=None, pe=None):
+    def __init__(self, logger, results, filename=None, pe=None):
         self.logger = logger
+        self.results = results
         self._reset_queues(reset_visited=True)
 
         if filename:
@@ -102,6 +102,7 @@ class PEHandler(object):
             self.visited = {}
 
         self.candidates = {}
+        self.found = []
 
         # Initialise empty lists
         for table in ["typeinfo", "fieldtable", "methodtable"]:
@@ -190,6 +191,8 @@ class PEHandler(object):
         found = False
 
         for s in sections:
+            self.logger.info("Analysing section {}".format(s.name))
+
             # Step 1 - hunt for vftables
             vftables = self._find_vftables(s)
 
@@ -204,7 +207,7 @@ class PEHandler(object):
                     #        Github issue #3.
                     raise Exception("Objects in more than one section")
 
-                # Step 2 - add item references from vftables
+                # Step 2 - add initial item references from vftables
                 for offset, data in vftables.items():
                     if data.fields["vmtFieldTable"]["data"]:
                         self._add_candidate(data.fields["vmtFieldTable"]["data"], "fieldtable")
@@ -242,19 +245,25 @@ class PEHandler(object):
                     if found == 0:
                         break
 
+            self.logger.info("Finished analysing section {}".format(s.name))
             # self._parse_extra(s, vftables)
 
         if not self.chosen_profile:
             self.logger.error(
-                "Didn't find any vftables.  Either this isn't Delphi, it doesn't use object orientation, or this is a bug."
+                "Didn't find vftables.  Either this isn't Delphi, it doesn't use object orientation, or this is a bug."
             )
             return
 
         # TODO: Ensure the top class is always TObject, or warn
+        # TODO: In strict mode, ensure no found items overlap (offset + length)
         # TODO: Check all parent classes have been found during the automated scan
-        # TODO: Build up a hierachy of classes
+        # TODO: Build up a hierarchy of classes
 
     def _add_candidate(self, va, table):
+
+        # TODO: Potential bug where items of a different type are found
+        #       at the same location.  This should presumably not happen
+        #       in a well formed file.
         if va in self.visited[table]:
             return
 
@@ -303,12 +312,12 @@ class PEHandler(object):
         (value,) = self._unpack_stream("I", section["data"])
         return value
 
-    def _va_to_offset(self, section, va):
-        return va - section["base_va"]
-
     def _parse_methodtable(self, section, va):
 
         self.logger.debug("found *method table at 0x{:08x}".format(va))
+
+        # TODO: Implement MethodTable parser
+        return
 
         start = self._va_to_offset(section, va)
         section["data"].seek(start)
@@ -324,6 +333,9 @@ class PEHandler(object):
 
         self.logger.debug(
             "found field table at 0x{:08x}".format(va))
+
+        # TODO: Implement FieldTable parser
+        return
 
         # TODO: Make a convenience function for va to offset
         start = va - section['base_va']
@@ -378,39 +390,6 @@ class PEHandler(object):
 
         return sections
 
-    # TODO: Move to util class
-
-    def _extract_pascal_string(self, stream, offset):
-        stream.seek(offset)
-        (length,) = self._unpack_stream("B", stream)
-        stream.seek(offset)
-        (text,) = self._unpack_stream("{}p".format(length + 1), stream)
-        return text
-
-    # TODO: Move to util class
-
-    def _in_section(self, section, va):
-        """
-        Validate that a virtual address exists within a section.
-        """
-        if not va:
-            return False
-
-        if va < section["base_va"] or va > section["base_va"] + section["size"]:
-            return False
-
-        return True
-
-    # TODO: Move to util class
-    @staticmethod
-    def _unpack_stream(fmt, stream):
-        """
-        Unpack data from a streaming object, e.g. BytesIO().
-        """
-        size = struct.calcsize(fmt)
-        buf = stream.read(size)
-        return struct.unpack(fmt, buf)
-
     def _parse_extra(self, section, vftables):
 
         for va, v in vftables.items():
@@ -437,7 +416,7 @@ class PEHandler(object):
 
                 # self.logger.debug(blah)
 
-    def _validate_vftable(self, section, offset, structure):
+    def _validate_vftable(self, section, offset):
         """
         Validate and extract a vftable from a specific offset.
         """
@@ -468,7 +447,7 @@ class PEHandler(object):
             while i < section.size - profile["distance"]:
                 fail = False
                 section.data.seek(i)
-                (ptr,) = self._unpack_stream("I", section.data)
+                (ptr, ) = unpack_stream("I", section.data)
 
                 # Calculate the virtual address of this location
                 va = section.load_address + i
@@ -476,7 +455,8 @@ class PEHandler(object):
                 if (va + profile["distance"]) == ptr:
                     self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
 
-                    tmp = self._validate_vftable(section, i, profile["vftable_struct"])
+                    # TODO: Pass information about current profile
+                    tmp = self._validate_vftable(section, i)
                     if tmp:
                         vftables[va] = tmp
                         candidates += 1

@@ -2,6 +2,7 @@ import io
 import logging
 from collections import OrderedDict
 from struct import unpack, calcsize
+from .utils import *
 
 
 class ValidationError(Exception):
@@ -39,6 +40,17 @@ class Section:
 
         return False
 
+    def offset_from_va(self, va):
+        """
+        Given a virtual address inside this section, calculate the offset.
+
+        :param va:
+        :return:
+        """
+        if not self.contains_va(va):
+            raise ValueError("Virtual address is not within this section")
+
+        return va - self.load_address
 
 class PESection(Section):
 
@@ -53,12 +65,15 @@ class PESection(Section):
 
         # pefile doesn't remove the null padding, trim any whitespace
         # TODO: Handle decoding exceptions
+        # TODO: Validate sensible character set
         self.name = section.Name.rstrip(b" \r\n\0").decode("ascii")
 
         super().__init__(section.VirtualAddress, section.SizeOfRawData, data)
 
 
 class BaseParser:
+
+    # TODO: Consider adding "relations", that can easily be enumerated
 
     def __init__(self, stream, section, start=None):
         """
@@ -118,6 +133,7 @@ class BaseParser:
 
 class Vftable(BaseParser):
 
+    # TODO: Take an argument for which profile matches (legacy vs. modern Delphi)
     def __init__(self, stream, section, offset=None):
         super().__init__(stream, section, offset)
         self.parse()
@@ -147,11 +163,10 @@ class Vftable(BaseParser):
         self._validate_headers()
 
         # Extract the class name
-        #name_offset = data["vmtClassName"] - section["base_va"]
-        #name = self._extract_pascal_string(section["data"], name_offset)
-        # self.logger.debug("Name: {}".format(name))
+        name_offset = self.section.offset_from_va(self.fields["vmtClassName"]["data"])
+        self.name = extract_pascal_string(self.stream, name_offset)
 
-        # TODO: Extract the class name from vmtClassName pointer
+        # TODO: Validate name
         # TODO: Parse additional class functions
 
     def _validate_headers(self):
