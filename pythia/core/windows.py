@@ -200,15 +200,17 @@ class PEHandler(object):
                     self.logger.warning(
                         "Have already found objects in a different section!"
                     )
+                    # FIXME: Find an example file to trigger this & test improvements.
+                    #        Github issue #3.
                     raise Exception("Objects in more than one section")
 
                 # Step 2 - add item references from vftables
                 for offset, data in vftables.items():
-                    if data["vmtFieldTable"]:
-                        self._add_candidate(data["vmtFieldTable"], "fieldtable")
+                    if data.fields["vmtFieldTable"]["data"]:
+                        self._add_candidate(data.fields["vmtFieldTable"]["data"], "fieldtable")
 
-                    if data["vmtMethodTable"]:
-                        self._add_candidate(data["vmtMethodTable"], "methodtable")
+                    if data.fields["vmtMethodTable"]["data"]:
+                        self._add_candidate(data.fields["vmtMethodTable"]["data"], "methodtable")
 
                 # Step 3 - iterate through all items repeatedly
                 passes = 0
@@ -372,7 +374,7 @@ class PEHandler(object):
                 section.Characteristics
                 & pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_CODE"]
             ):
-                sections.append(PESection(section))
+                sections.append(PESection(section, self._mapped_data))
 
         return sections
 
@@ -444,11 +446,12 @@ class PEHandler(object):
 
         try:
             obj = Vftable(section.data, section, offset)
+            return obj
         except ValidationError:
             # TODO: Log the message at high verbosity levels
             pass
 
-        # TODO: Return something :)
+        return None
 
     def _find_vftables(self, section):
         """
@@ -490,7 +493,7 @@ class PEHandler(object):
                     self.logger.error(
                         "Found more than one matching profile.  Please specify one on the commandline to continue."
                     )
-                    self.logger.error(profiles)
+                    # TODO: Print a list of profiles and their description
                     sys.exit(1)
                 else:
                     self.chosen_profile = self.profiles[name]
@@ -498,12 +501,12 @@ class PEHandler(object):
         if self.chosen_profile:
             self.logger.info(
                 "Found {} vftables in section {} using profile {}".format(
-                    len(vftables), section["name"], self.chosen_profile["description"]
+                    len(vftables), section.name, self.chosen_profile["description"]
                 )
             )
 
         # TODO: If we don't find a profile, scan the section manually
-        #       for any presence of \x07TOBJECT.
+        #       for any presence of \x07TOBJECT.  Github issue #4.
 
         # TODO: Consider updating a section specific vftable dict here, rather
         # than returning?
