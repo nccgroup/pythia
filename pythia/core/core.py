@@ -6,6 +6,7 @@ from .windows import PEHandler
 class DelphiParser(object):
 
     handler = None
+    results = None
     logger = None
 
     def __init__(self, filename=None, pe=None, logger=None, debug=0):
@@ -19,12 +20,14 @@ class DelphiParser(object):
         #       -> raw file
         #       -> raw section (user provides base VA etc.)
 
+        self.results = DelphiProgram()
+
         if filename:
             # TODO: Auto detect input file type and use the right handler
-            self.handler = PEHandler(logger=self.logger, filename=filename)
+            self.handler = PEHandler(logger=self.logger, results=self.results, filename=filename)
 
         elif pe:
-            self.handler = PEHandler(logger=self.logger, pe=pe)
+            self.handler = PEHandler(logger=self.logger, results=self.results, pe=pe)
 
         else:
             raise AttributeError("Need either filename or pe argument")
