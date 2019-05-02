@@ -42,14 +42,13 @@ class Section:
 
 class PESection(Section):
 
-    # TODO: Consider taking an optional data argument if the image has previously been
-    #       memory mapped?
-    def __init__(self, section):
+    def __init__(self, section, mapped_data=None):
         self._section = section
         self.load_address = self._section.pe.OPTIONAL_HEADER.ImageBase + section.VirtualAddress
 
         # Map the data and keep only the relevant parts
-        mapped_data = self._section.pe.get_memory_mapped_image()
+        if mapped_data is None:
+            mapped_data = self._section.pe.get_memory_mapped_image()
         data = io.BytesIO(mapped_data[section.VirtualAddress : section.VirtualAddress + section.SizeOfRawData])
 
         # pefile doesn't remove the null padding, trim any whitespace
