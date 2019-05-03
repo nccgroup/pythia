@@ -52,6 +52,12 @@ class Section:
 
         return va - self.load_address
 
+    def va_from_offset(self, offset):
+        if offset < 0 or offset > self.size:
+            raise ValueError("Offset is not within this section")
+
+        return offset + self.load_address
+
 class PESection(Section):
 
     def __init__(self, section, mapped_data=None):
@@ -85,7 +91,6 @@ class BaseParser:
 
         # TODO: Initialise a logger with the module name
 
-        # TODO: Fields could be an OrderedDict?
         self.fields = OrderedDict()
         self.stream = stream
         self.section = section
@@ -95,6 +100,7 @@ class BaseParser:
     def parse_fields(self, format, names):
 
         # TODO: Take an optional start position - right now this assumes all reads are from the last position
+        self.stream.seek(self.offset)
 
         # This does not allow numeric arguments, if these are required in
         # future the code will need updating.
@@ -116,15 +122,17 @@ class BaseParser:
 
             # TODO: Error handling on .read()
             buf = self.stream.read(length)
-            self.offset += length
 
             (data,) = unpack(f, buf)
-            self.add_field(names[i], data, f)
+            self.add_field(names[i], data, f, self.offset)
+
+            self.offset += length
             i += 1
 
-    def add_field(self, name, data, data_type):
+    def add_field(self, name, data, data_type, offset):
         # TODO: Add offset & length
-        data = { 'data': data, 'type': data_type }
+        va = self.section.va_from_offset(offset)
+        data = { 'data': data, 'type': data_type, 'offset': offset, 'va': va }
         self.fields[name] = data
 
     # TODO: dump() method
@@ -132,6 +140,9 @@ class BaseParser:
 
 
 class Vftable(BaseParser):
+
+    methods = OrderedDict()
+    fields = OrderedDict()
 
     # TODO: Take an argument for which profile matches (legacy vs. modern Delphi)
     def __init__(self, stream, section, offset=None):
@@ -192,3 +203,51 @@ class Vftable(BaseParser):
             raise ValidationError("Improbably large vmtInstanceSize {}".format(self.fields["vmtInstanceSize"]["data"]))
 
         return True
+
+
+class MethodTable(BaseParser):
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+
+        self.parse_fields("H", [ "num_methods"])
+        print(self.fields)
+
+
+class FieldTable(BaseParser):
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+
+        self.parse_fields("H", ["header"])
+
+        if self.fields['header']['data'] == 0:
+            self._parse_modern()
+
+        else:
+            pass
+
+    def _parse_modern(self):
+
+        self.parse_fields('IH', ["unk1", "num_fields"])
+        print (self.fields)
+
+        i = 0
+        while i < self.fields["num_fields"]["data"]:
+            # TODO: Embed another class that derives from BaseParser here :)
+            print("found a field")
+
+        #field_entry_modern = Struct(
+        #    "unk1" / Byte,
+        #    "TypeinfoPtr" / Int32ul,  # PPTypeinfo
+        #    "Offset" / Int32ul,
+        #    "Name" / PascalString(Byte, 'ascii'),
+        #    "NumExtra" / Int16ul,
+        #    "Extra" / Bytes(this.NumExtra - 2),
+        #)

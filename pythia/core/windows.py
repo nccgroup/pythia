@@ -5,7 +5,7 @@ import pefile
 from binascii import hexlify
 from .helpers import LicenseHelper, PackageInfoHelper
 from .structures import *
-from .objects import PESection, Vftable, ValidationError
+from .objects import *
 from .utils import unpack_stream
 
 
@@ -316,14 +316,12 @@ class PEHandler(object):
 
         self.logger.debug("found *method table at 0x{:08x}".format(va))
 
-        # TODO: Implement MethodTable parser
-        return
-
-        start = self._va_to_offset(section, va)
-        section["data"].seek(start)
-        table = method_table.parse_stream(section["data"])
-
-        self.logger.debug(table)
+        try:
+            obj = MethodTable(section.data, section, section.offset_from_va(va))
+            return obj
+        except ValidationError:
+            # TODO: Log the message at high verbosity levels
+            pass
 
     def _parse_fieldtable(self, section, va):
         """
@@ -334,14 +332,14 @@ class PEHandler(object):
         self.logger.debug(
             "found field table at 0x{:08x}".format(va))
 
-        # TODO: Implement FieldTable parser
-        return
+        try:
+            obj = FieldTable(section.data, section, section.offset_from_va(va))
+            return obj
+        except ValidationError:
+            # TODO: Log the message at high verbosity levels
+            pass
 
-        # TODO: Make a convenience function for va to offset
-        start = va - section['base_va']
-        section['data'].seek(start)
-        table = field_table.parse_stream(section['data'])
-        self.logger.debug(table)
+        return
 
         # For legacy field tables, parse the fieldtypes table and
         # extract all references to Typeinfo structures.

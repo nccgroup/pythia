@@ -2,6 +2,13 @@ import struct
 
 
 def extract_pascal_string(stream, offset):
+    """
+    Obtain a Pascal string from a stream.
+
+    :param stream:
+    :param offset:
+    :return:
+    """
 
     # TODO: Error handling
     stream.seek(offset)
