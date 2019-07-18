@@ -2,6 +2,7 @@ import io
 import logging
 from collections import OrderedDict
 from struct import unpack, calcsize
+from prettytable import PrettyTable
 from .utils import *
 
 
@@ -35,7 +36,7 @@ class Section:
         :param va: Virtual address to check
         :return: True if the VA is within the section, or False
         """
-        if va > self.load_address and va < self.load_address + self.size:
+        if va >= self.load_address and va <= self.load_address + self.size:
             return True
 
         return False
@@ -96,6 +97,8 @@ class BaseParser:
         self.section = section
         self.start = start
         self.offset = start
+        self.related = {}
+        self.embedded = []
 
     def parse_fields(self, format, names):
 
@@ -105,7 +108,7 @@ class BaseParser:
         # This does not allow numeric arguments, if these are required in
         # future the code will need updating.
         # TODO: Would this be better at class level?  Test performance
-        # TODO: Handling of strings (Pascal and zero terminated)
+        # TODO: Handling of C strings (zero terminated)
         valid = list("xB?HILQsp")
 
         if not all(c in valid for c in format):
@@ -118,22 +121,82 @@ class BaseParser:
 
         #  This assumes single byte format specifiers (no numbers)
         for f in format:
-            length = calcsize(f)
+            if f == "p":
+                # Special handling for Pascal strings
+                data = extract_pascal_string(self.stream, self.offset)
+                size = len(data) + 1
 
-            # TODO: Error handling on .read()
-            buf = self.stream.read(length)
+            else:
+                size = calcsize(f)
 
-            (data,) = unpack(f, buf)
-            self.add_field(names[i], data, f, self.offset)
+                # TODO: Error handling on .read()
+                buf = self.stream.read(size)
 
-            self.offset += length
+                (data,) = unpack(f, buf)
+
+            self.add_field(names[i], data, f, self.offset, size)
+            self.offset += size
             i += 1
 
-    def add_field(self, name, data, data_type, offset):
-        # TODO: Add offset & length
+    def embed(self, name, obj):
+
+        # Parse the data
+        embedded = obj(self.stream, self.section, self.offset)
+
+        # Add the object to fields
+        size = len(embedded)
+        self.add_field(name, embedded, None, self.offset, size)
+        self.embedded.append(embedded)
+
+        # FIXME: Move our offset ahead by the length of the new object
+        self.offset += size
+
+    def add_field(self, name, data, data_type, offset, size):
         va = self.section.va_from_offset(offset)
-        data = { 'data': data, 'type': data_type, 'offset': offset, 'va': va }
+        data = { 'name': name, 'data': data, 'type': data_type, 'offset': offset, 'va': va, 'size': size }
         self.fields[name] = data
+
+    def add_related(self, va, obj_type):
+        if va:
+            self.related[va] = obj_type
+
+    def get_dump(self):
+        items = []
+
+        # TODO: Add depth, so embedded objects are indented one level below in the hierarchy
+
+        for name,data in self.fields.items():
+            # Check if data is derived from BaseParser and get additional
+            # dump if necessary.
+            if isinstance(data["data"], BaseParser):
+                items += data["data"].get_dump()
+            else:
+                items.append(data)
+
+        return items
+
+    def __str__(self):
+        table = PrettyTable()
+        data = self.get_dump()
+
+        table.field_names = [ "VA", "Name", "Type", "Data", "Size"]
+        for field in data:
+            row = [ field["va"], field["name"], field["type"], field["data"], field["size"] ]
+            table.add_row(row)
+
+        return table.get_string()
+
+    def __len__(self):
+        """
+        The length of an instance is the size (in bytes) of the fields it contains.
+
+        :return: size of all contained fields
+        """
+        len = 0
+        for _, data in self.fields.items():
+            len += data['size']
+
+        return len
 
     # TODO: dump() method
     # TODO: pack() method to repack into bytes
@@ -174,10 +237,14 @@ class Vftable(BaseParser):
         self._validate_headers()
 
         # Extract the class name
+        # TODO: Validate name
         name_offset = self.section.offset_from_va(self.fields["vmtClassName"]["data"])
         self.name = extract_pascal_string(self.stream, name_offset)
 
-        # TODO: Validate name
+        self.add_related(self.fields["vmtTypeInfo"]["data"], TypeInfo)
+        self.add_related(self.fields["vmtFieldTable"]["data"], FieldTable)
+        self.add_related(self.fields["vmtMethodTable"]["data"], MethodTable)
+
         # TODO: Parse additional class functions
 
     def _validate_headers(self):
@@ -214,7 +281,22 @@ class MethodTable(BaseParser):
     def parse(self):
 
         self.parse_fields("H", [ "num_methods"])
-        print(self.fields)
+
+        i = 0
+        while i < self.fields["num_methods"]["data"]:
+            self.embed("method_{}".format(i), MethodEntry)
+            i += 1
+
+
+class MethodEntry(BaseParser):
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["size", "function_ptr", "name"]
+        self.parse_fields("HIp", fields)
 
 
 class FieldTable(BaseParser):
@@ -228,26 +310,129 @@ class FieldTable(BaseParser):
         self.parse_fields("H", ["header"])
 
         if self.fields['header']['data'] == 0:
-            self._parse_modern()
+            self._parse_type_a()
 
         else:
-            pass
+            # FIXME: Implement parsing for legacy fields
+            self._parse_type_b()
 
-    def _parse_modern(self):
+        # TODO: Make field data accessible at class level
 
+    def _parse_type_a(self):
+
+        # The number of fields is embedded along with another (currently unknown) value
         self.parse_fields('IH', ["unk1", "num_fields"])
-        print (self.fields)
 
         i = 0
         while i < self.fields["num_fields"]["data"]:
-            # TODO: Embed another class that derives from BaseParser here :)
-            print("found a field")
+            self.embed("field_{}".format(i), FieldEntryA)
 
-        #field_entry_modern = Struct(
-        #    "unk1" / Byte,
-        #    "TypeinfoPtr" / Int32ul,  # PPTypeinfo
-        #    "Offset" / Int32ul,
-        #    "Name" / PascalString(Byte, 'ascii'),
-        #    "NumExtra" / Int16ul,
-        #    "Extra" / Bytes(this.NumExtra - 2),
-        #)
+            i += 1
+
+    def _parse_type_b(self):
+        # The object this points to is parsed as TypeTable
+        self.parse_fields('I', ["typetable_ptr"])
+        self.add_related(self.fields["typetable_ptr"]["data"], TypeTable)
+
+        # The number of fields is given by the header
+        i = 0
+        while i < self.fields["header"]["data"]:
+            self.embed("field_{}".format(i), FieldEntryB)
+            i += 1
+
+        # TODO: There is additional data following the field entries, work out what this is
+
+
+class FieldEntryA(BaseParser):
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        # typeinfo_ptr is a pointer to a pointer to TypeInfo
+        fields = ["unk1", "typeinfo_ptr", "offset", "name", "extra_bytes"]
+        self.parse_fields("BIIpH", fields)
+
+        # TODO: Validate typeinfo_ptr is within the section or raise ValidationError
+        # TODO: Validate name is ASCII or raise ValidationError
+
+        # If we've got type information, add it to related items
+        if self.fields["typeinfo_ptr"]["data"]:
+            # Dereference typeinfo pointer
+            offset = self.section.offset_from_va(self.fields["typeinfo_ptr"]["data"])
+            (ptr,) = unpack_stream("I", self.stream, offset)
+            self.add_related(ptr, TypeInfo)
+
+        # Read extra data, given by header minus 2 bytes
+        if self.fields["extra_bytes"]["data"] > 2:
+            # FIXME: Consume extra data
+            raise NotImplementedError()
+
+
+class FieldEntryB(BaseParser):
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["offset", "type_index", "name"]
+        self.parse_fields("IHp", fields)
+
+
+class TypeInfo(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["type", "name"]
+        self.parse_fields("Bp", fields)
+
+        # TODO: Parse type specific data
+        data_type = self.fields["type"]["data"]
+        if data_type == 7:
+            self.embed("data", Type_tkClass)
+
+
+class Type_tkClass(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["class_ptr", "parent_ptr", "unk_1", "unit_name", "num_props"]
+        self.parse_fields("IIHpH", fields)
+
+        # TODO: Parse properties
+        i = 0
+        while i < self.fields["num_props"]["data"]:
+            self.embed("prop_{}".format(i), Property)
+            i += 1
+
+
+class Property(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["parent_ptr", "get_proc", "set_proc", "stored_proc", "index", "default", "name_index", "name"]
+        self.parse_fields("IIIIIIHp", fields)
+
+
+class TypeTable(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["num_entries"]
+        self.parse_fields("H", fields)
+
+        # Each type is a pointer to a vftable
+        i = 0
+        while i < self.fields["num_entries"]["data"]:
+            self.parse_fields("I", [ "type_{}".format(i) ])
+            i += 1

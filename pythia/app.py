@@ -2,6 +2,7 @@
 # filetype=python
 
 import argparse
+import json
 from . import VERSION_STRING
 from .core import DelphiParser
 
@@ -44,11 +45,18 @@ def main():
         # "image_base": pe.OPTIONAL_HEADER.ImageBase
     }
 
-    # output = {"info": info, "classes": classes}
+    # TODO: Fixme output
+    print("Found {} total items".format(len(engine.results.items)))
+
+    items = []
+    for item in engine.results.items:
+        items += item.get_dump()
+
+    output = {"info": info, "items": items}
 
     # TODO: Wrap the output with some data about the input file
-    # with open("output.json", "w") as fh:
-    #   fh.write(json.dumps(output))
+    with open("output.json", "w") as fh:
+       fh.write(json.dumps(output))
 
 
 if __name__ == "__main__":

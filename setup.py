@@ -31,5 +31,6 @@ setuptools.setup(
         'pefile',
         'PyYAML',
         'treelib',
+        'prettytable',
     ],
 )

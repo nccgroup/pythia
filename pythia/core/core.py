@@ -55,7 +55,7 @@ class DelphiProgram(object):
 
     license = None
     units = None
-    classes = None
+    items = []
 
 
 class License(object):

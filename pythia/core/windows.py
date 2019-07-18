@@ -99,16 +99,16 @@ class PEHandler(object):
         """
 
         if reset_visited:
-            self.visited = {}
+            self.visited = set()
 
         self.candidates = {}
         self.found = []
 
         # Initialise empty lists
-        for table in ["typeinfo", "fieldtable", "methodtable"]:
-            if reset_visited:
-                self.visited[table] = set()
-            self.candidates[table] = set()
+        #for table in ["typeinfo", "fieldtable", "methodtable"]:
+        #    if reset_visited:
+        #        self.visited[table] = set()
+        #    self.candidates[table] = set()
 
     def _from_pefile(self, pe):
         """
@@ -153,6 +153,7 @@ class PEHandler(object):
                 self.logger.debug(
                     "Found Delphi %s license information in PE resources", license
                 )
+                self.results.license = license
             else:
                 self.logger.debug(
                     "Unknown Delphi license %s", hexlify(license)
@@ -175,12 +176,12 @@ class PEHandler(object):
         if data:
             # TODO: Get the output and do something with it
             helper.from_bytes(data)
+            self.results.units = helper
 
         else:
             self.logger.warning(
                 "Did not find PACKAGEINFO DVCLAL license information in PE resources"
             )
-
 
     def analyse(self):
 
@@ -208,42 +209,7 @@ class PEHandler(object):
                     raise Exception("Objects in more than one section")
 
                 # Step 2 - add initial item references from vftables
-                for offset, data in vftables.items():
-                    if data.fields["vmtFieldTable"]["data"]:
-                        self._add_candidate(data.fields["vmtFieldTable"]["data"], "fieldtable")
-
-                    if data.fields["vmtMethodTable"]["data"]:
-                        self._add_candidate(data.fields["vmtMethodTable"]["data"], "methodtable")
-
-                # Step 3 - iterate through all items repeatedly
-                passes = 0
-                while True:
-                    found = 0
-                    passes += 1
-
-                    self.logger.info(
-                        "Extracting additional data, pass {}".format(passes)
-                    )
-
-                    if passes > 16:
-                        self.logger.error(
-                            "Too many passes, aborting.  Please report this error"
-                        )
-                        break
-
-                    # Can't update items whilst iterating, so take a local copy
-                    candidates = self.candidates
-                    self._reset_queues()
-
-                    for table, data in candidates.items():
-                        func = getattr(self, "_parse_{}".format(table))
-                        for va in sorted(data):
-                            found += 1
-                            self._add_visited(va, table)
-                            func(s, va)
-
-                    if found == 0:
-                        break
+                self.results.items += self._process_related(vftables.values(), s)
 
             self.logger.info("Finished analysing section {}".format(s.name))
             # self._parse_extra(s, vftables)
@@ -259,6 +225,40 @@ class PEHandler(object):
         # TODO: Check all parent classes have been found during the automated scan
         # TODO: Build up a hierarchy of classes
 
+    def _process_related(self, objects, section, depth=1):
+        # TODO: Refactor this mess of recursion
+
+        new_objects = []
+
+        self.logger.info(
+            "Extracting additional data, pass {}".format(depth)
+        )
+
+        depth += 1
+        if depth > 16:
+            return new_objects
+
+        for o in objects:
+            if o.embedded:
+                new_objects += self._process_related(o.embedded, section, depth)
+
+            for va, parser in o.related.items():
+                # Don't process the same item twice
+                if va in self.visited:
+                    continue
+
+                offset = section.offset_from_va(va)
+                self.logger.debug("Adding type {} at VA 0x{:08x} (offset {})".format(parser, va, offset))
+                new = parser(section.data, section, offset)
+                self.logger.debug(new)
+                new_objects.append(new)
+                self.visited.add(va)
+
+        if new_objects:
+            new_objects += self._process_related(new_objects, section, depth)
+
+        return new_objects
+
     def _add_candidate(self, va, table):
 
         # TODO: Potential bug where items of a different type are found
@@ -273,12 +273,18 @@ class PEHandler(object):
         self.visited[table].add(va)
 
     def _parse_typeinfo(self, section, va):
+
         self.logger.debug("found typeinfo at 0x{:08x}".format(va))
 
-        start = va - section["base_va"]
-        section["data"].seek(start)
-        table = typeinfo.parse_stream(section["data"])
-        self.logger.debug(table)
+        try:
+            obj = TypeInfo(section.data, section, section.offset_from_va(va))
+        except ValidationError:
+            # TODO: Log the message at high verbosity levels
+            pass
+
+        self.logger.debug(obj)
+        self.results.items.append(obj)
+        return obj
 
         # Process references to parent or linked typeinfo structures
         for ref in ["TypeinfoPtr", "ParentPtr"]:
@@ -303,25 +309,19 @@ class PEHandler(object):
                         "ptr {} to 0x{:08x} is not in this section".format(ref, ptr)
                     )
 
-    def _deref_pp(self, section, va):
-        """
-        Follow a pointer and TODO
-        """
-        ptr_offset = self._va_to_offset(section, va)
-        section["data"].seek(ptr_offset)
-        (value,) = self._unpack_stream("I", section["data"])
-        return value
-
     def _parse_methodtable(self, section, va):
 
         self.logger.debug("found *method table at 0x{:08x}".format(va))
 
         try:
             obj = MethodTable(section.data, section, section.offset_from_va(va))
-            return obj
         except ValidationError:
             # TODO: Log the message at high verbosity levels
             pass
+
+        self.logger.debug(obj)
+        self.results.items.append(obj)
+        return obj
 
     def _parse_fieldtable(self, section, va):
         """
@@ -334,42 +334,15 @@ class PEHandler(object):
 
         try:
             obj = FieldTable(section.data, section, section.offset_from_va(va))
-            return obj
         except ValidationError:
             # TODO: Log the message at high verbosity levels
             pass
 
-        return
+        self.logger.debug(str(obj))
 
-        # For legacy field tables, parse the fieldtypes table and
-        # extract all references to Typeinfo structures.
-        if table.Legacy:
-            self.logger.debug("legacy types table:")
-
-            self.logger.debug("field types pointer: %08x", table.Legacy.FieldtypesPtr)
-
-            # TODO: Refactor using _deref_pp
-            types_offset = table.Legacy.FieldtypesPtr - section["base_va"]
-            section["data"].seek(types_offset)
-            types_table = fieldtypes_table.parse_stream(section["data"])
-
-            self.logger.debug(types_table)
-            for entry in types_table.Entries:
-                pass
-
-        elif table.Modern:
-            # This is a pointer to a pointer, need to follow
-            for field in table.Modern.Fields:
-
-                if self._in_section(section, field.TypeinfoPtr):
-                    # TODO: Refactor using _deref_pp and _va_to_offset
-                    typeinfo_ptr_offset = field.TypeinfoPtr - \
-                        section['base_va']
-                    section['data'].seek(typeinfo_ptr_offset)
-                    (typeinfo_va,) = self._unpack_stream("I", section['data'])
-
-                    self._add_candidate(typeinfo_va, 'typeinfo')
-#                    typeinfo_offset -= typeinfo_va - section['base_va']
+        # TODO: Field tables contain pointers to type info, add these to candidates
+        self.results.items.append(obj)
+        return obj
 
     def _find_code_sections(self):
         """
@@ -423,12 +396,12 @@ class PEHandler(object):
 
         try:
             obj = Vftable(section.data, section, offset)
-            return obj
         except ValidationError:
             # TODO: Log the message at high verbosity levels
-            pass
+            return None
 
-        return None
+        self.results.items.append(obj)
+        return obj
 
     def _find_vftables(self, section):
         """

@@ -248,7 +248,7 @@ typeinfo = Struct(
     "Data" / Switch(this.Type,
                     {
                         'tkInteger': typeinfo_NumCharTypes,
-                        'tkChar': typeinfo_NumCharTypes,
+                        'tkChar': typeinfo_NumCharTypes,  # unsigned
                         'tkEnumeration': typeinfo_tkEnumeration,
                         'tkClass': typeinfo_tkClass,
                         'tkDynArray': typeinfo_tkDynArray,
@@ -292,6 +292,7 @@ field_entry_legacy = Struct(
     "Offset" / Int32ul,
     "TypeIndex" / Int16ul,
     "Name" / PascalString(Byte, 'ascii'),
+    # TODO: Does anything follow this?
 )
 
 field_table_legacy = Struct(
