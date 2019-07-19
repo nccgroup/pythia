@@ -213,27 +213,28 @@ class Vftable(BaseParser):
     methods = OrderedDict()
     fields = OrderedDict()
 
+    common = [
+        "SelfPtr",
+        "IntfTable",
+        "AutoTable",
+        "InitTable",
+        "TypeInfo",
+        "FieldTable",
+        "MethodTable",
+        "DynamicTable",
+        "ClassName",
+        "InstanceSize",
+        "Parent",
+    ]
+
     # TODO: Take an argument for which profile matches (legacy vs. modern Delphi)
     def __init__(self, stream, section, offset=None):
         super().__init__(stream, section, offset)
         self.parse()
 
     def parse(self):
-        common = [
-            "vmtSelfPtr",
-            "vmtIntfTable",
-            "vmtAutoTable",
-            "vmtInitTable",
-            "vmtTypeInfo",
-            "vmtFieldTable",
-            "vmtMethodTable",
-            "vmtDynamicTable",
-            "vmtClassName",
-            "vmtInstanceSize",
-            "vmtParent",
-        ]
 
-        self.parse_fields("IIIIIIIIIII", common)
+        self.parse_fields("IIIIIIIIIII", self.common)
 
         # A number of checks to ensure our brute force method has found a valid
         # vftable.  Note that legitimate code produced by the Delphi compiler
@@ -244,12 +245,17 @@ class Vftable(BaseParser):
 
         # Extract the class name
         # TODO: Validate name
-        name_offset = self.section.offset_from_va(self.fields["vmtClassName"]["data"])
+        name_offset = self.section.offset_from_va(self.fields["ClassName"]["data"])
         self.name = extract_pascal_string(self.stream, name_offset)
 
-        self.add_related(self.fields["vmtTypeInfo"]["data"], TypeInfo)
-        self.add_related(self.fields["vmtFieldTable"]["data"], FieldTable)
-        self.add_related(self.fields["vmtMethodTable"]["data"], MethodTable)
+        self.add_related(self.fields["ClassName"]["data"], ClassName)
+
+        # TODO: Consider adding a fake "name" object so it appears as an item in the 
+        #       output and the IDA script can import it
+
+        self.add_related(self.fields["TypeInfo"]["data"], TypeInfo)
+        self.add_related(self.fields["FieldTable"]["data"], FieldTable)
+        self.add_related(self.fields["MethodTable"]["data"], MethodTable)
 
         # TODO: Parse additional class functions
 
@@ -265,17 +271,33 @@ class Vftable(BaseParser):
         :return: True if validation is successful
         """
 
-        ignore = ["vmtInstanceSize", "vmtSelfPtr"]
+        ignore = ["InstanceSize", "SelfPtr"]
 
         for name,info in self.fields.items():
-            if name.startswith("vmt") and name not in ignore:
+            if name in self.common and name not in ignore:
                 if info['data'] and not self.section.contains_va(info['data']):
                     raise ValidationError("Field {} data points outside the code section".format(name))
 
-        if self.fields["vmtInstanceSize"]["data"] > 1024 * 500:
-            raise ValidationError("Improbably large vmtInstanceSize {}".format(self.fields["vmtInstanceSize"]["data"]))
+        if self.fields["InstanceSize"]["data"] > 1024 * 500:
+            raise ValidationError("Improbably large InstanceSize {}".format(self.fields["InstanceSize"]["data"]))
 
         return True
+
+
+class ClassName(BaseParser):
+    """
+    This is a "fake" object to ensure class names appear in the output and
+    can be imported into other tools (e.g. marking up raw data).  The class
+    name is not within the vftable, so can't be directly embedded.
+    """
+
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+
+        self.parse_fields("p", [ "name"])
 
 
 class MethodTable(BaseParser):
