@@ -130,7 +130,8 @@ class BaseParser:
         for f in format:
             if f == "G":
                 # Special handling for GUIDs
-                buf = self.stream.read(16)
+                size = 16
+                buf = self.stream.read(size)
                 data = UUID(bytes_le = buf)
 
             elif f == "p":
