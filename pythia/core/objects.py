@@ -94,7 +94,7 @@ class BaseParser:
 
         # TODO: Use the full name here, or take a logger, so it's in the
         #       right heirachy
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self._init_logging()
         self.fields = OrderedDict()
         self.stream = stream
         self.section = section
@@ -102,6 +102,10 @@ class BaseParser:
         self.offset = start
         self.related = {}
         self.embedded = []
+
+    def _init_logging(self):
+        name = f'{self.__module__}.{self.__class__.__qualname__}'
+        self.logger = logging.getLogger(name)
 
     def parse_fields(self, format, names):
 
