@@ -292,6 +292,8 @@ class Vftable(BaseParser):
                 if info['data'] and not self.section.contains_va(info['data']):
                     raise ValidationError("Field {} data points outside the code section".format(name))
 
+        # TODO: Compare instance size from a selection of binaries and assess "normal"
+        #       range of sizes.
         if self.fields["InstanceSize"]["data"] > 1024 * 500:
             raise ValidationError("Improbably large InstanceSize {}".format(self.fields["InstanceSize"]["data"]))
 
@@ -440,8 +442,20 @@ class TypeInfo(BaseParser):
 class Type_tkMethod(BaseParser):
 
     def parse(self):
-        fields = ["method_type", "num_params"]
+        fields = ["MethodType", "ParamCount"]
         self.parse_fields("BB", fields)
+
+        i = 0
+        while i < self.fields["ParamCount"]["data"]:
+            self.embed(f"param_{i}", Parameter)
+            i += 1
+
+
+class Parameter(BaseParser):
+
+    def parse(self):
+        fields = ["unk1", "ParamName", "TypeName"]
+        self.parse_fields("Bpp", fields)
 
         # TODO: Embed parameters, Type_tkMethodParam
 
@@ -488,6 +502,8 @@ class Type_Enumeration(BaseParser):
         fields = ["OrdinalType", "MinValue", "MaxValue", "BaseTypePtr" ]
         self.parse_fields("BIII", fields)
 
+        # TODO: Enumeration may be followed by UnitName?
+
         # TODO: Add related type BaseTypePtr
 
         # TODO: Parse parent relationships to see if values are attached there,
@@ -496,6 +512,8 @@ class Type_Enumeration(BaseParser):
 class Type_Interface(BaseParser):
 
     def parse(self):
+        # TODO: unk1 is HasGuid
+        # TODO: unk2 may be PropCount (according to IDA)
         fields = ["ParentPtr", "unk1", "Guid", "UnitName", "unk2" ]
         self.parse_fields("IBGpI", fields)
 
