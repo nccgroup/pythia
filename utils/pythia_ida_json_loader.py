@@ -23,4 +23,16 @@ for item in data["items"]:
         MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
         MakeWord(item["va"])
 
-idaapi.refresh_strlist(0, 0)
+    elif item["type"] == "G":
+        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
+        MakeDword(item["va"])
+        MakeWord(item["va"] + 4)
+        MakeWord(item["va"] + 6)
+        MakeWord(item["va"] + 8)
+        MakeData(item["va"] + 10, FF_BYTE, 6, 0)
+
+        comm = "GUID: {}".format(item["data"])
+        MakeComm(item['va'], comm)
+        
+
+#idaapi.refresh_strlist(0, 1)

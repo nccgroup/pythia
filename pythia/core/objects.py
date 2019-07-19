@@ -132,7 +132,7 @@ class BaseParser:
                 # Special handling for GUIDs
                 size = 16
                 buf = self.stream.read(size)
-                data = UUID(bytes_le = buf)
+                data = str(UUID(bytes_le = buf))
 
             elif f == "p":
                 # Special handling for Pascal strings
