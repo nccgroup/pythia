@@ -91,8 +91,9 @@ class BaseParser:
         :return:
         """
 
-        # TODO: Initialise a logger with the module name
-
+        # TODO: Use the full name here, or take a logger, so it's in the
+        #       right heirachy
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.fields = OrderedDict()
         self.stream = stream
         self.section = section
