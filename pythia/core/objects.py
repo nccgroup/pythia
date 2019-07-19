@@ -6,6 +6,7 @@ from prettytable import PrettyTable
 from uuid import UUID
 from .utils import *
 
+# TODO: Change naming to be more pythonic, away from Type_tkMethod etc.
 
 class ValidationError(Exception):
     pass
@@ -421,8 +422,47 @@ class TypeInfo(BaseParser):
 
         # TODO: Parse type specific data
         data_type = self.fields["type"]["data"]
-        if data_type == 7:
+
+        # TODO: Consider a list to map these instead of if statement
+
+        # tkInteger
+        if data_type == 1:
+            self.embed("data", Type_NumberOrChar)
+
+        # tkChar
+        elif data_type == 2:
+            self.embed("data", Type_NumberOrChar)
+
+        elif data_type == 3:
+            self.embed("data", Type_Enumeration)
+
+        elif data_type == 7:
             self.embed("data", Type_tkClass)
+
+        elif data_type == 8:
+            self.embed("data", Type_tkMethod)
+
+        # tkWChar
+        elif data_type == 9:
+            self.embed("data", Type_NumberOrChar)
+
+        elif data_type == 15:
+            self.embed("data", Type_Interface)
+
+        elif data_type == 20:
+            self.embed("data", Type_Pointer)
+
+
+class Type_tkMethod(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["method_type", "num_params"]
+        self.parse_fields("BB", fields)
+
+        # TODO: Embed parameters, Type_tkMethodParam
 
 
 class Type_tkClass(BaseParser):
@@ -434,11 +474,73 @@ class Type_tkClass(BaseParser):
         fields = ["class_ptr", "parent_ptr", "unk_1", "unit_name", "num_props"]
         self.parse_fields("IIHpH", fields)
 
+        # This will be zero for base types
+        if self.fields["parent_ptr"]["data"]:
+            # TODO: REVIEW AND CLEANUP.  This only finds one extra type in a 
+            #       sample database, which makes no sense?  Actually this is weird,
+            #       because it found an extra TypeInfo that was not found through
+            #       enumerating vftables?
+            self.logger.error("parent is at {:08x}".format(self.fields["parent_ptr"]["data"]))
+            # TODO: Generalise this, code repeats in multiple places.  Allow
+            #       add_related to take a bool flag or add a deference function?
+            offset = self.section.offset_from_va(self.fields["parent_ptr"]["data"])
+            (parent_ptr,) = unpack_stream("I", self.stream, offset)
+            self.logger.error("adding type pointer to {:08x}".format(parent_ptr))
+            self.add_related(parent_ptr, TypeInfo)
+
         # TODO: Parse properties
         i = 0
         while i < self.fields["num_props"]["data"]:
             self.embed("prop_{}".format(i), Property)
             i += 1
+
+
+class Type_NumberOrChar(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["OrdinalType", "MinValue", "MaxValue"]
+        self.parse_fields("BII", fields)
+
+        # TODO: Adjust min/max based on the ordinal type!
+
+
+class Type_Enumeration(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["OrdinalType", "MinValue", "MaxValue", "BaseTypePtr" ]
+        self.parse_fields("BIII", fields)
+
+        # TODO: Add related type BaseTypePtr
+
+        # TODO: Parse parent relationships to see if values are attached there,
+        #       if not then embed additional values from this location.
+
+class Type_Interface(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["ParentPtr", "unk1", "Guid", "UnitName", "unk2" ]
+        self.parse_fields("IBGpI", fields)
+
+
+class Type_Pointer(BaseParser):
+    def __init__(self, stream, section, offset=None):
+        super().__init__(stream, section, offset)
+        self.parse()
+
+    def parse(self):
+        fields = ["TypePtr" ]
+        self.parse_fields("I", fields)
+
+        # TODO: Add related type TypePtr
 
 
 class Property(BaseParser):
@@ -449,6 +551,12 @@ class Property(BaseParser):
     def parse(self):
         fields = ["parent_ptr", "get_proc", "set_proc", "stored_proc", "index", "default", "name_index", "name"]
         self.parse_fields("IIIIIIHp", fields)
+
+        if self.fields["parent_ptr"]["data"]:
+            offset = self.section.offset_from_va(self.fields["parent_ptr"]["data"])
+            (parent_ptr,) = unpack_stream("I", self.stream, offset)
+            self.logger.error("adding type pointer to {:08x}".format(parent_ptr))
+            self.add_related(parent_ptr, TypeInfo)
 
 
 class TypeTable(BaseParser):
