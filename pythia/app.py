@@ -46,11 +46,18 @@ def main():
     }
 
     # TODO: Fixme output
-    print("Found {} total items".format(len(engine.results.items)))
+    total_found = 0
+    total_embedded = 0
 
     items = []
     for item in engine.results.items:
-        items += item.get_dump()
+        if item.is_embedded:
+            total_embedded += 1
+        else:
+            items += item.get_dump()
+            total_found += 1
+
+    print(f"Found {total_found} items and {total_embedded} embedded items")
 
     output = {"info": info, "items": items}
 

@@ -104,12 +104,6 @@ class PEHandler(object):
         self.candidates = {}
         self.found = []
 
-        # Initialise empty lists
-        #for table in ["typeinfo", "fieldtable", "methodtable"]:
-        #    if reset_visited:
-        #        self.visited[table] = set()
-        #    self.candidates[table] = set()
-
     def _from_pefile(self, pe):
         """
         Initialise with an existing pefile object, useful when some other
@@ -224,8 +218,11 @@ class PEHandler(object):
         # TODO: Check all parent classes have been found during the automated scan
         # TODO: Build up a hierarchy of classes
 
-    def _process_related(self, objects, section, depth=1):
+    def _process_related(self, objects, section, processed=None, depth=1):
         # TODO: Refactor this mess of recursion
+
+        if processed is None:
+            processed = []
 
         new_objects = []
 
@@ -238,8 +235,9 @@ class PEHandler(object):
             return new_objects
 
         for o in objects:
-            if o.embedded:
-                new_objects += self._process_related(o.embedded, section, depth)
+            # Add all of the embedded objects to be parsed in the next recursive call.
+            # This ensures we don't exceed the maximum depth (accidentally or maliciously).
+            new_objects.extend(o.embedded)
 
             for va, parser in o.related.items():
                 # Don't process the same item twice
@@ -254,7 +252,7 @@ class PEHandler(object):
                 self.visited.add(va)
 
         if new_objects:
-            new_objects += self._process_related(new_objects, section, depth)
+            new_objects += self._process_related(new_objects, section, processed, depth)
 
         return new_objects
 

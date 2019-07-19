@@ -84,7 +84,7 @@ class BaseParser:
 
     # TODO: Consider adding "relations", that can easily be enumerated
 
-    def __init__(self, stream, section, start=None):
+    def __init__(self, stream, section, start=None, is_embedded=False):
         """
 
         :param stream:
@@ -100,8 +100,15 @@ class BaseParser:
         self.section = section
         self.start = start
         self.offset = start
+        self.is_embedded = is_embedded
         self.related = {}
         self.embedded = []
+
+        # TODO: Consider calling a setup() class here which can be defined in concrete classes
+        #       No parsers currently require this, so skipped.
+
+        # Needs to be implemented by concrete classes
+        self.parse()
 
     def _init_logging(self):
         name = f'{self.__module__}.{self.__class__.__qualname__}'
@@ -154,7 +161,7 @@ class BaseParser:
     def embed(self, name, obj):
 
         # Parse the data
-        embedded = obj(self.stream, self.section, self.offset)
+        embedded = obj(self.stream, self.section, self.offset, is_embedded=True)
 
         # Add the object to fields
         size = len(embedded)
@@ -235,9 +242,6 @@ class Vftable(BaseParser):
     ]
 
     # TODO: Take an argument for which profile matches (legacy vs. modern Delphi)
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
 
@@ -255,6 +259,9 @@ class Vftable(BaseParser):
         name_offset = self.section.offset_from_va(self.fields["ClassName"]["data"])
         self.name = extract_pascal_string(self.stream, name_offset)
 
+        # Add a relation to ClassName, which ensures the output contains
+        # details about the Pascal string and where it appears in the
+        # raw stream.  This is parsed later, so cannot be used now.
         self.add_related(self.fields["ClassName"]["data"], ClassName)
 
         # TODO: Consider adding a fake "name" object so it appears as an item in the 
@@ -298,20 +305,11 @@ class ClassName(BaseParser):
     name is not within the vftable, so can't be directly embedded.
     """
 
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
-
     def parse(self):
-
         self.parse_fields("p", [ "name"])
 
 
 class MethodTable(BaseParser):
-
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
 
@@ -325,20 +323,12 @@ class MethodTable(BaseParser):
 
 class MethodEntry(BaseParser):
 
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
-
     def parse(self):
         fields = ["size", "function_ptr", "name"]
         self.parse_fields("HIp", fields)
 
 
 class FieldTable(BaseParser):
-
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
 
@@ -380,10 +370,6 @@ class FieldTable(BaseParser):
 
 class FieldEntryA(BaseParser):
 
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
-
     def parse(self):
         # typeinfo_ptr is a pointer to a pointer to TypeInfo
         fields = ["unk1", "typeinfo_ptr", "offset", "name", "extra_bytes"]
@@ -407,19 +393,12 @@ class FieldEntryA(BaseParser):
 
 class FieldEntryB(BaseParser):
 
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
-
     def parse(self):
         fields = ["offset", "type_index", "name"]
         self.parse_fields("IHp", fields)
 
 
 class TypeInfo(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["type", "name"]
@@ -459,9 +438,6 @@ class TypeInfo(BaseParser):
 
 
 class Type_tkMethod(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["method_type", "num_params"]
@@ -471,9 +447,6 @@ class Type_tkMethod(BaseParser):
 
 
 class Type_tkClass(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["class_ptr", "parent_ptr", "unk_1", "unit_name", "num_props"]
@@ -501,9 +474,6 @@ class Type_tkClass(BaseParser):
 
 
 class Type_NumberOrChar(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["OrdinalType", "MinValue", "MaxValue"]
@@ -513,9 +483,6 @@ class Type_NumberOrChar(BaseParser):
 
 
 class Type_Enumeration(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["OrdinalType", "MinValue", "MaxValue", "BaseTypePtr" ]
@@ -527,9 +494,6 @@ class Type_Enumeration(BaseParser):
         #       if not then embed additional values from this location.
 
 class Type_Interface(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["ParentPtr", "unk1", "Guid", "UnitName", "unk2" ]
@@ -537,9 +501,6 @@ class Type_Interface(BaseParser):
 
 
 class Type_Pointer(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["TypePtr" ]
@@ -549,9 +510,6 @@ class Type_Pointer(BaseParser):
 
 
 class Property(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["parent_ptr", "get_proc", "set_proc", "stored_proc", "index", "default", "name_index", "name"]
@@ -565,9 +523,6 @@ class Property(BaseParser):
 
 
 class TypeTable(BaseParser):
-    def __init__(self, stream, section, offset=None):
-        super().__init__(stream, section, offset)
-        self.parse()
 
     def parse(self):
         fields = ["num_entries"]
