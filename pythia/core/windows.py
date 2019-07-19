@@ -212,7 +212,6 @@ class PEHandler(object):
                 self.results.items += self._process_related(vftables.values(), s)
 
             self.logger.info("Finished analysing section {}".format(s.name))
-            # self._parse_extra(s, vftables)
 
         if not self.chosen_profile:
             self.logger.error(
@@ -259,91 +258,6 @@ class PEHandler(object):
 
         return new_objects
 
-    def _add_candidate(self, va, table):
-
-        # TODO: Potential bug where items of a different type are found
-        #       at the same location.  This should presumably not happen
-        #       in a well formed file.
-        if va in self.visited[table]:
-            return
-
-        self.candidates[table].add(va)
-
-    def _add_visited(self, va, table):
-        self.visited[table].add(va)
-
-    def _parse_typeinfo(self, section, va):
-
-        self.logger.debug("found typeinfo at 0x{:08x}".format(va))
-
-        try:
-            obj = TypeInfo(section.data, section, section.offset_from_va(va))
-        except ValidationError:
-            # TODO: Log the message at high verbosity levels
-            pass
-
-        self.logger.debug(obj)
-        self.results.items.append(obj)
-        return obj
-
-        # Process references to parent or linked typeinfo structures
-        for ref in ["TypeinfoPtr", "ParentPtr"]:
-            if hasattr(table.Data, ref):
-                ptr = getattr(table.Data, ref)
-
-                # Some parent / typeinfo pointers appear to hold data
-                # that is not actually a PPTypeInfo
-                if self._in_section(section, ptr):
-                    typeinfo_va = self._deref_pp(section, ptr)
-                    self._add_candidate(typeinfo_va, "typeinfo")
-
-        if table.Type == types.tkDynArray:
-            for ref in ["ElementTypePtr", "ElementType2Ptr", "unk5"]:
-                ptr = getattr(table.Data, ref)
-
-                if self._in_section(section, ptr):
-                    typeinfo_va = self._deref_pp(section, ptr)
-                    self._add_candidate(typeinfo_va, "typeinfo")
-                else:
-                    self.logger.debug(
-                        "ptr {} to 0x{:08x} is not in this section".format(ref, ptr)
-                    )
-
-    def _parse_methodtable(self, section, va):
-
-        self.logger.debug("found *method table at 0x{:08x}".format(va))
-
-        try:
-            obj = MethodTable(section.data, section, section.offset_from_va(va))
-        except ValidationError:
-            # TODO: Log the message at high verbosity levels
-            pass
-
-        self.logger.debug(obj)
-        self.results.items.append(obj)
-        return obj
-
-    def _parse_fieldtable(self, section, va):
-        """
-
-        """
-        # TODO: This function should return a generic Fields object
-
-        self.logger.debug(
-            "found field table at 0x{:08x}".format(va))
-
-        try:
-            obj = FieldTable(section.data, section, section.offset_from_va(va))
-        except ValidationError:
-            # TODO: Log the message at high verbosity levels
-            pass
-
-        self.logger.debug(str(obj))
-
-        # TODO: Field tables contain pointers to type info, add these to candidates
-        self.results.items.append(obj)
-        return obj
-
     def _find_code_sections(self):
         """
         Iterate over all code sections in a PE file and return a dictionary
@@ -360,32 +274,6 @@ class PEHandler(object):
                 sections.append(PESection(section, self._mapped_data))
 
         return sections
-
-    def _parse_extra(self, section, vftables):
-
-        for va, v in vftables.items():
-
-            start = v["vmtIntfTable"]
-            if start:
-                self.logger.debug("found intftable at 0x{:08x}".format(start))
-
-                start -= section["base_va"]
-                blah = interface_table.parse(section["mmap"][start:])
-
-                # TODO: Refactor
-                for e in blah.entries:
-                    guid = e.guid
-                    fields = [
-                        guid.Data1,
-                        guid.Data2,
-                        guid.Data3,
-                        guid.Data4,
-                        guid.Data5,
-                    ]
-                    human_guid = "-".join([hexlify(d) for d in fields])
-                    # self.logger.debug("*GUID: {}".format(human_guid))
-
-                # self.logger.debug(blah)
 
     def _validate_vftable(self, section, offset):
         """
