@@ -3,6 +3,7 @@ import logging
 from collections import OrderedDict
 from struct import unpack, calcsize
 from prettytable import PrettyTable
+from uuid import UUID
 from .utils import *
 
 
@@ -109,7 +110,7 @@ class BaseParser:
         # future the code will need updating.
         # TODO: Would this be better at class level?  Test performance
         # TODO: Handling of C strings (zero terminated)
-        valid = list("xB?HILQsp")
+        valid = list("xB?HILQspG")
 
         if not all(c in valid for c in format):
             raise ValueError("Invalid format string")
@@ -121,7 +122,12 @@ class BaseParser:
 
         #  This assumes single byte format specifiers (no numbers)
         for f in format:
-            if f == "p":
+            if f == "G":
+                # Special handling for GUIDs
+                buf = self.stream.read(16)
+                data = UUID(bytes_le = buf)
+
+            elif f == "p":
                 # Special handling for Pascal strings
                 data = extract_pascal_string(self.stream, self.offset)
                 size = len(data) + 1
