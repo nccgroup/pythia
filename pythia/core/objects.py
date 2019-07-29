@@ -84,7 +84,7 @@ class BaseParser:
 
     # TODO: Consider adding "relations", that can easily be enumerated
 
-    def __init__(self, stream, section, start=None, is_embedded=False):
+    def __init__(self, stream, section, start=None, parent=None):
         """
 
         :param stream:
@@ -100,7 +100,7 @@ class BaseParser:
         self.section = section
         self.start = start
         self.offset = start
-        self.is_embedded = is_embedded
+        self.parent = parent
         self.related = {}
         self.embedded = []
 
@@ -110,7 +110,15 @@ class BaseParser:
         # Needs to be implemented by concrete classes
         self.parse()
 
+        # TODO: Check for alignment bytes, either 0x90 or 0x8BC0 or 0x8D4000.  Not all items are
+        #       fully parsed, so can't do this here.  Might be better in utility scripts for IDA
+        #       or Ghidra.
+
     def _init_logging(self):
+        """
+        Initialise a logger with the name of this class, allowing finer control over which debug
+        messages are suppressed.
+        """
         name = f'{self.__module__}.{self.__class__.__qualname__}'
         self.logger = logging.getLogger(name)
 
@@ -161,7 +169,7 @@ class BaseParser:
     def embed(self, name, obj):
 
         # Parse the data
-        embedded = obj(self.stream, self.section, self.offset, is_embedded=True)
+        embedded = obj(self.stream, self.section, self.offset, parent=self)
 
         # Add the object to fields
         size = len(embedded)
@@ -229,7 +237,7 @@ class Vftable(BaseParser):
 
     common = [
         "SelfPtr",
-        "IntfTable",
+        "InterfaceTable",
         "AutoTable",
         "InitTable",
         "TypeInfo",
@@ -262,7 +270,7 @@ class Vftable(BaseParser):
         # Add a relation to ClassName, which ensures the output contains
         # details about the Pascal string and where it appears in the
         # raw stream.  This is parsed later, so cannot be used now.
-        self.add_related(self.fields["ClassName"]["data"], ClassName)
+        self.add_related(self.fields["ClassName"]["data"], PascalString)
 
         # TODO: Consider adding a fake "name" object so it appears as an item in the 
         #       output and the IDA script can import it
@@ -270,6 +278,7 @@ class Vftable(BaseParser):
         self.add_related(self.fields["TypeInfo"]["data"], TypeInfo)
         self.add_related(self.fields["FieldTable"]["data"], FieldTable)
         self.add_related(self.fields["MethodTable"]["data"], MethodTable)
+        self.add_related(self.fields["InterfaceTable"]["data"], InterfaceTable)
 
         # TODO: Parse additional class functions
 
@@ -300,7 +309,7 @@ class Vftable(BaseParser):
         return True
 
 
-class ClassName(BaseParser):
+class PascalString(BaseParser):
     """
     This is a "fake" object to ensure class names appear in the output and
     can be imported into other tools (e.g. marking up raw data).  The class
@@ -309,6 +318,10 @@ class ClassName(BaseParser):
 
     def parse(self):
         self.parse_fields("p", [ "name"])
+
+        # The method of extracting an ASCII string will automatically create an exception for
+        # characters outside Python's accepted range.  Consider tightening this to printable
+        # ones only?
 
 
 class MethodTable(BaseParser):
@@ -422,6 +435,12 @@ class TypeInfo(BaseParser):
         elif data_type == 3:
             self.embed("data", Type_Enumeration)
 
+        elif data_type == 4:
+            self.embed("data", Type_tkFloat)
+
+        elif data_type == 6:
+            self.embed("data", Type_tkSet)
+
         elif data_type == 7:
             self.embed("data", Type_tkClass)
 
@@ -432,12 +451,48 @@ class TypeInfo(BaseParser):
         elif data_type == 9:
             self.embed("data", Type_NumberOrChar)
 
+        elif data_type == 14:
+            self.embed("data", Type_tkRecord)
+
         elif data_type == 15:
             self.embed("data", Type_Interface)
 
         elif data_type == 20:
             self.embed("data", Type_Pointer)
 
+        else:
+            self.logger.debug("Unknown type {}".format(data_type))
+
+class Type_tkFloat(BaseParser):
+
+    def parse(self):
+        # TODO: Float type is an enum of ftSingle (0), ftDouble, ftExtended, ftComp, ftCurr (4)
+        #       which should be parsed somehow.
+        fields = ["FloatType", "NumExtra"]
+        self.parse_fields("BH", fields)
+
+class Type_tkRecord(BaseParser):
+
+    def parse(self):
+        fields = ["RecordSize", "NumManagedFields"]
+        self.parse_fields("II", fields)
+
+        # Now parse managed fields
+
+        # Now parse 1 unknown byte and get the number of records
+
+        # Now embed records
+
+class Type_tkSet(BaseParser):
+    def parse(self):
+        fields = ["unk1", "TypeinfoPtr"]
+        self.parse_fields("BI", fields)
+
+        if self.fields["TypeinfoPtr"]["data"]:
+            offset = self.section.offset_from_va(self.fields["TypeinfoPtr"]["data"])
+            (typeinfo_ptr,) = unpack_stream("I", self.stream, offset)
+            self.logger.error("adding type pointer to {:08x}".format(typeinfo_ptr))
+            self.add_related(typeinfo_ptr, TypeInfo)
 
 class Type_tkMethod(BaseParser):
 
@@ -504,10 +559,49 @@ class Type_Enumeration(BaseParser):
 
         # TODO: Enumeration may be followed by UnitName?
 
-        # TODO: Add related type BaseTypePtr
+        # TODO: Add related type BaseTypePtr - in 1 test this didn't add any new objects
+        if self.fields["BaseTypePtr"]["data"]:
+            offset = self.section.offset_from_va(self.fields["BaseTypePtr"]["data"])
+            (base_ptr,) = unpack_stream("I", self.stream, offset)
+            self.logger.error("adding type pointer to {:08x}".format(base_ptr))
+            self.add_related(base_ptr, TypeInfo)
 
-        # TODO: Parse parent relationships to see if values are attached there,
-        #       if not then embed additional values from this location.
+        # If the BaseTypePtr points to a different enumeration then we should use the
+        # labels from the parent.  If the BaseTypePtr points to itself then labels for
+        # each option will be included in this object, as Pascal strings.
+
+        # Resolve the parent of all embedded objects
+        # TODO: Move this into BaseParser as a generic sub
+        topmost = self
+        while topmost.parent is not None:
+            self.logger.debug("found a parent object: {}".format(topmost))
+            topmost = topmost.parent
+
+        self.logger.debug("topmost object is: {}".format(topmost))
+
+        # Get VA of this object
+        # TODO: Use of -4 here is a nasty fix, we should instead defererence BaseTypePtr
+        #       and see if it matches.
+        va = self.section.va_from_offset(topmost.start) - 4
+        self.logger.debug("va is: {:08x} and basetype is {:08x}".format(va, self.fields["BaseTypePtr"]["data"]))
+
+        if va == self.fields["BaseTypePtr"]["data"]:
+            self.logger.debug("this appears to be a parent object")
+
+            # MinValue always seems to be zero, but this is assumed here, perhaps incorrectly?
+            i = 0
+            while i <= self.fields["MaxValue"]["data"]:
+                self.embed(f"value_{i}", PascalString)
+                i += 1
+        else:
+            self.logger.debug("this probably inherits from parent")
+
+        # Can't do this for built-in types, e.g. Boolean.  Need a nice way of ignoring
+        # these whilst, perhaps by catching the exception?
+        try:
+            self.embed("UnitName", PascalString)
+        except UnicodeDecodeError:
+            pass
 
 class Type_Interface(BaseParser):
 
@@ -551,3 +645,19 @@ class TypeTable(BaseParser):
         while i < self.fields["num_entries"]["data"]:
             self.parse_fields("I", [ "type_{}".format(i) ])
             i += 1
+
+class InterfaceTable(BaseParser):
+
+    def parse(self):
+        self.parse_fields("I", ["NumEntries"])
+
+        i = 0
+        while i < self.fields["NumEntries"]["data"]:
+            self.embed(f"interface_{i}", InterfaceEntry)
+            i += 1
+
+class InterfaceEntry(BaseParser):
+
+    def parse(self):
+        fields = ["Guid", "VtablePtr", "Offset", "GetterPtr"]
+        self.parse_fields("GIII", fields)

@@ -41,6 +41,8 @@ Unofficial documentation is available for Delphi 2005 ([see here](http://pages.c
 
 The source code for Free Pascal is also useful ([Github mirror](https://github.com/graemeg/freepascal)).
 
+An older [IDC script](https://github.com/Eadom/Compiler-Internals--Exceptions-and-RTTI/blob/master/typeinfo/Delphi_Typeinfo.idc) is available from Igor Skochinsky which details default methods in various Delphi versions.
+
 The first item in a vftable is `vmtSelfPtr`, which points to the start of the
 virtual function table.  The script scans each code segment in the PE file for
 any location pointing forward `+0x4C` bytes.  Note that the Delphi compiler aligns

@@ -51,7 +51,7 @@ def main():
 
     items = []
     for item in engine.results.items:
-        if item.is_embedded:
+        if item.parent is not None:
             total_embedded += 1
         else:
             items += item.get_dump()
