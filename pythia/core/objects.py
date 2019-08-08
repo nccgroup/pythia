@@ -151,8 +151,8 @@ class BaseParser:
 
             elif f == "p":
                 # Special handling for Pascal strings
-                data = extract_pascal_string(self.stream, self.offset)
-                size = len(data) + 1
+                (data, raw_length) = extract_pascal_string(self.stream, self.offset)
+                size = raw_length
 
             else:
                 size = calcsize(f)
@@ -265,7 +265,7 @@ class Vftable(BaseParser):
         # Extract the class name
         # TODO: Validate name
         name_offset = self.section.offset_from_va(self.fields["ClassName"]["data"])
-        self.name = extract_pascal_string(self.stream, name_offset)
+        (self.name, _) = extract_pascal_string(self.stream, name_offset)
 
         # Add a relation to ClassName, which ensures the output contains
         # details about the Pascal string and where it appears in the
