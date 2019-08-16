@@ -3,48 +3,10 @@ import logging
 import struct
 import pefile
 from binascii import hexlify
-from .helpers import LicenseHelper, PackageInfoHelper
+from .helpers import *
 from .structures import *
 from .objects import *
 from .utils import unpack_stream
-
-
-class PEHelper(object):
-    """
-    A very basic OO wrapper around pefile, making it easier to obtain data
-    without repeating code.
-    """
-
-    def __init__(self, pe):
-        self._pe = pe
-        self.logger = logging.getLogger("pehelper")
-
-    def get_resource_data(self, resource_type, resource_name):
-
-        pe = self._pe
-        pe.parse_data_directories(
-            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]]
-        )
-
-        if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
-            self.logger.warning(
-                "This executable has no resources, expected DVCLAL license information"
-            )
-            return
-
-        for directory in pe.DIRECTORY_ENTRY_RESOURCE.entries:
-
-            if directory.id != resource_type:
-                continue
-
-            for entry in directory.directory.entries:
-                if str(entry.name) == resource_name:
-                    offset = entry.directory.entries[0].data.struct.OffsetToData
-                    size = entry.directory.entries[0].data.struct.Size
-                    data = pe.get_memory_mapped_image()[offset : offset + size]
-                    return data
-
-        return None
 
 
 class PEHandler(object):
@@ -67,22 +29,20 @@ class PEHandler(object):
         "delphi_legacy": {
             "description": "Delphi (legacy)",
             "distance": 0x4C,
-            #"vftable_struct": vftable_legacy,
         },
         "delphi_modern": {
             "description": "Delphi (modern)",
             "distance": 0x58,
-            #"vftable_struct": vftable_modern,
         },
     }
     chosen_profile = None
     visited = None  # TODO: Is this required?
     candidates = None  # TODO: Is this required?
-    results = None
 
-    def __init__(self, logger, results, filename=None, pe=None):
+    def __init__(self, logger, context, filename=None, pe=None):
+        # TODO: Create our own logger
         self.logger = logger
-        self.results = results
+        self.context = context
         self._reset_queues(reset_visited=True)
 
         if filename:
@@ -98,6 +58,8 @@ class PEHandler(object):
         startup.
         """
 
+        # TODO: Scrap me in favour of a work queue object
+
         if reset_visited:
             self.visited = set()
 
@@ -112,7 +74,6 @@ class PEHandler(object):
         self._pe = pe
         self._pehelper = PEHelper(pe)
         self._mapped_data = self._pe.get_memory_mapped_image()
-        self.logger.debug("size of mapped data is: {}".format(len(self._mapped_data)))
 
         # TODO: Validate 32bit.  Need to find 64bit samples to add parsing.
         self._extract_access_license(pe)
@@ -129,8 +90,8 @@ class PEHandler(object):
 
         # TODO: Exception handling - test with junk data
         pe = pefile.PE(filename, fast_load=True)
+        self.logger.info("Loading PE from file {}".format(filename))
         self._from_pefile(pe)
-        self.logger.info("Loaded PE from file {}".format(filename))
 
     def _extract_access_license(self, pe):
         """
@@ -144,12 +105,12 @@ class PEHandler(object):
         if data:
             license = helper.from_bytes(data)
             if license:
-                self.logger.debug(
+                self.logger.info(
                     "Found Delphi %s license information in PE resources", license
                 )
-                self.results.license = license
+                self.context.license = license
             else:
-                self.logger.debug(
+                self.logger.warning(
                     "Unknown Delphi license %s", hexlify(license)
                 )
 
@@ -170,7 +131,7 @@ class PEHandler(object):
         if data:
             # TODO: Get the output and do something with it
             helper.from_bytes(data)
-            self.results.units = helper
+            self.context.units = helper
 
         else:
             self.logger.warning(
@@ -182,169 +143,178 @@ class PEHandler(object):
         # TODO: Find a sample that has objects in more than one section,
         #       as this will break a number of assumptions made throughout
 
+        # TODO: This is incompatible with an API for IDA / Ghidra that takes data from
+        #       one section.
+
+        self.work_queue = WorkQueue()
+
+        units = UnitInitHelper(self._pehelper)
+        table_pos = units.find_init_table()
+        if table_pos:
+            self.logger.debug("Unit initialisation table is at 0x{:08x}".format(table_pos))
+        else:
+            # TODO: Implement a brute force mechanism as an alternative.
+            self.logger.error("Unit initialisation table not found, cannot continue")
+            return
+
+        # There may be multiple code sections.  Find the one containing the unit initialisation
+        # table and process it.  Multiple sections containing Delphi objects are not currently
+        # supported, and it is unknown whether this would be generated by the Delphi compiler.
         sections = self._find_code_sections()
+        section_names = ", ".join(s.name for s in sections)
+        self.logger.debug("Found {} code section(s) named: {}".format(len(sections), section_names))
+        code_section = None
+
+        self.context.code_sections = sections
+        self.context.data_sections = self._find_data_sections()
+        self.logger.debug(self.context)
+
+        for s in sections:
+            if s.contains_va(s.load_address):
+                self.logger.debug("Unit initialisation table is in section {}".format(s.name))
+                code_section = s
+                break
+
+        if code_section is None:
+            self.logger.error("Could not find code section containing the entry point (whilst looking for unit initialisation table), cannot continue")
+            return
+
+        self.logger.info("Analysing section {}".format(s.name))
+        init_table = units.parse_init_table(code_section, table_pos, self.context)
+
+        # Get crude Delphi version (<2010 or >=2010), which allows targeting of vftable search
+        # strategy.  We check if the Unit Initialisation Table has a member named NumTypes,
+        # which is the first of four extra fields introduced by Delphi 2010.
+        try:
+            num_types = init_table.fields["NumTypes"]
+            self.logger.info("Executable seems to be generated by Delphi 2010+")
+            modern_delphi = True
+        except KeyError:
+            modern_delphi = False
+            self.logger.info("Executable seems to be generated by an earlier version of Delphi (pre 2010)")
+
+        # Additional version detection strategies:
+        #  - Look for "extra data" marker from newer Delphi, followed by alignment padding
+        #    (e.g. 02 00 8b c0 is "2 bytes extra data" followed by alignment)
+        #  - Size of various vftables / objects
+        #  - "Embarcadero Delphi for Win" string in newer versions
+        #  - "string" vs "String" (from DIE)
+
         found = False
 
         for s in sections:
-            self.logger.info("Analysing section {}".format(s.name))
 
             # Step 1 - hunt for vftables
-            vftables = self._find_vftables(s)
+            vftables = self._find_vftables(s, modern_delphi)
+            self.logger.debug(vftables)
 
             if vftables:
                 if not found:
                     found = True
                 else:
                     self.logger.warning(
-                        "Have already found objects in a different section!"
+                        "Have already found potential objects in a different section"
                     )
                     # FIXME: Find an example file to trigger this & test improvements.
                     #        Github issue #3.
                     raise Exception("Objects in more than one section")
 
-                # Step 2 - add initial item references from vftables
-                self.results.items += self._process_related(vftables.values(), s)
-
             self.logger.info("Finished analysing section {}".format(s.name))
 
-        if not self.chosen_profile:
-            self.logger.error(
-                "Didn't find vftables.  Either this isn't Delphi, it doesn't use object orientation, or this is a bug."
-            )
-            return
+        item = self.work_queue.get_item()
+        while item:
 
+            try:
+                obj = item["item_type"](code_section, item["location"], work_queue=self.work_queue)
+                self.context.items.append(obj)
+                self.logger.debug(obj)
+
+            except ValidationError:
+                # This is fine for Vftables found during the manual scan (as there may be
+                # false positives) but should not normally happen otherwise.
+                self.logger.debug("Could not validate object type {} at {:08x}".format(item["item_type"], item["location"]))
+
+            item = self.work_queue.get_item()
+
+        self.logger.debug(self.work_queue._queue)
         # TODO: Ensure the top class is always TObject, or warn
         # TODO: In strict mode, ensure no found items overlap (offset + length)
         # TODO: Check all parent classes have been found during the automated scan
         # TODO: Build up a hierarchy of classes
 
-    def _process_related(self, objects, section, processed=None, depth=1):
-        # TODO: Refactor this mess of recursion
-
-        if processed is None:
-            processed = []
-
-        new_objects = []
-
-        self.logger.info(
-            "Extracting additional data, pass {}".format(depth)
-        )
-
-        depth += 1
-        if depth > 16:
-            return new_objects
-
-        for o in objects:
-            # Add all of the embedded objects to be parsed in the next recursive call.
-            # This ensures we don't exceed the maximum depth (accidentally or maliciously).
-            new_objects.extend(o.embedded)
-
-            for va, parser in o.related.items():
-                # Don't process the same item twice
-                if va in self.visited:
-                    continue
-
-                offset = section.offset_from_va(va)
-                self.logger.debug("Adding type {} at VA 0x{:08x} (offset {})".format(parser, va, offset))
-                new = parser(section.data, section, offset)
-                self.logger.debug(new)
-                new_objects.append(new)
-                self.visited.add(va)
-
-        if new_objects:
-            new_objects += self._process_related(new_objects, section, processed, depth)
-
-        return new_objects
-
-    def _find_code_sections(self):
-        """
-        Iterate over all code sections in a PE file and return a dictionary
-        including section data.
-        """
+    def _find_sections(self, flags=None):
         sections = []
 
         # Check each code segment to see if it has the code flag
         for section in self._pe.sections:
-            if (
-                section.Characteristics
-                & pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_CODE"]
-            ):
+            if flags and section.Characteristics & flags:
                 sections.append(PESection(section, self._mapped_data))
 
         return sections
 
-    def _validate_vftable(self, section, offset):
+    def _find_code_sections(self):
         """
-        Validate and extract a vftable from a specific offset.
+        Obtain a list of PESection objects for code sections.
         """
+        return self._find_sections(pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_CODE"])
 
-        section.data.seek(offset)
+    def _find_data_sections(self):
+        """
+        Obtain a list of PESection objects for code sections.
+        """
+        return self._find_sections(pefile.SECTION_CHARACTERISTICS["IMAGE_SCN_CNT_INITIALIZED_DATA"])
 
-        try:
-            obj = Vftable(section.data, section, offset)
-        except ValidationError:
-            # TODO: Log the message at high verbosity levels
-            return None
-
-        self.results.items.append(obj)
-        return obj
-
-    def _find_vftables(self, section):
+    def _find_vftables(self, section, modern_delphi):
         """
         """
+        i = 0
+        found = 0
 
-        matches = {}
-        vftables = {}
+        # Crude distinction between Delphi versions.
+        # TODO: This needs further work to check whether other Delphi versions potentially
+        #       have different distances.
+        if modern_delphi:
+            distance = 0x58
+        else:
+            distance = 0x4c
 
-        # TODO: This is incompatible with the user providing a default profile
-        for name, profile in self.profiles.items():
-            i = 0
-            candidates = 0
+            # Delphi 3
+            #distance = 0x40
 
-            while i < section.size - profile["distance"]:
-                fail = False
-                section.data.seek(i)
-                (ptr, ) = unpack_stream("I", section.data)
+        while i < section.size - distance:
+            section.data.seek(i)
+            (ptr, ) = unpack_stream("I", section.data)
 
-                # Calculate the virtual address of this location
-                va = section.load_address + i
+            # Calculate the virtual address of this location
+            va = section.load_address + i
+            # TODO: Enable when better logging granularity is available
+            #self.logger.debug("i is {} and VA 0x{:08x} points to 0x{:08x}".format(i, va, ptr))
 
-                if (va + profile["distance"]) == ptr:
+            if (va + distance) == ptr:
+
+                # Validate the first five DWORDs.  Regardless of Delphi version these
+                # should be 0 (not set) or a pointer within this section.  This helps to
+                # reduce the number of false positives we add to the work queue.
+                #
+                # A more thorough check is conducted when parsing this into an object later,
+                # but this simple test useful.
+                j = 5
+                error = False
+
+                while j:
+                    (ptr, ) = unpack_stream("I", section.data)
+                    if ptr != 0 and not section.contains_va(ptr):
+                        error = True
+                    j -= 1
+
+                if not error:
+                    found += 1
                     self.logger.debug("Found a potential vftable at 0x{:08x}".format(va))
+                    self.work_queue.add_item(va, Vftable)
 
-                    # TODO: Pass information about current profile
-                    tmp = self._validate_vftable(section, i)
-                    if tmp:
-                        vftables[va] = tmp
-                        candidates += 1
+            # FIXME: 32-bit assumption, see Github issue #6
+            i += 4
 
-                # TODO: 64bit incompatibility
-                i += 4
-
-            matches[name] = candidates
-
-        # TODO: This is incompatible with the user providing a default profile
-        for name, candidates in matches.items():
-            if candidates > 0:
-                if self.chosen_profile:
-                    self.logger.error(
-                        "Found more than one matching profile.  Please specify one on the commandline to continue."
-                    )
-                    # TODO: Print a list of profiles and their description
-                    sys.exit(1)
-                else:
-                    self.chosen_profile = self.profiles[name]
-
-        if self.chosen_profile:
-            self.logger.info(
-                "Found {} vftables in section {} using profile {}".format(
-                    len(vftables), section.name, self.chosen_profile["description"]
-                )
-            )
-
-        # TODO: If we don't find a profile, scan the section manually
+        # TODO: If we don't find any matches, scan the section manually
         #       for any presence of \x07TOBJECT.  Github issue #4.
-
-        # TODO: Consider updating a section specific vftable dict here, rather
-        # than returning?
-        return vftables
+        return found

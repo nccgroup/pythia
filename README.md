@@ -93,12 +93,24 @@ Use the `--save-tree` option to generate a file like:
     |   |-- EDCP_hash (at 0x00469f20)
     .. etc ..
 
+# Supported Delphi versions
+
+The current aim is for this tool to support Delphi version 3 (released 1997) and above.  A number of changes would be required for Delphi 2 (released 1996).
+
+There is no aim to support other compilers, e.g. FreePascal, however this could be investigated if required.
+
 # Future aims
 
 * Identify the Delhi version (e.g. from `PACKAGEINFO` or `DVCLAL` resource) and adjust scanning for different vftable layouts.
 * Parse more class information, e.g. properties (a Delphi specific item) and method tables
 * Parse Delphi RTTI information (vmtTypeInfo in the vftable)
 * Disassemble code with Capstone and identify virtual calls (e.g. match `call [ecx+3Fh]` to an instance method)
+
+## Ideas for identifying Delphi version
+
+Inspect the unit initialisation table and check the size of header.  Delphi >=2010 have a larger offset than previous versions.
+
+Inspect the size of vftables (if possible?) to see how large the offsets are.
 
 # Caveats
 
@@ -107,6 +119,7 @@ Use the `--save-tree` option to generate a file like:
 * Not designed to be a full Delphi decompiler.  Use DeDe / IDR / Hex-Rays.
 * Only useful with Delphi binaries that use objects (not all do).
 * Modern Delphi uses names like `TComparer<System.Bindings.EvalProtocol.TPair<System.IInterface,System.Pointer>>` which are fairly indecipherable in IDA.
+* Not designed to process packed files.  Unpack and dump to a regular PE file first.
 
 Please send me examples of binaries where this tool doesn't work, so it can
 be improved.

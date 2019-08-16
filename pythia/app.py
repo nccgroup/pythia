@@ -6,6 +6,14 @@ import json
 from . import VERSION_STRING
 from .core import DelphiParser
 
+class TextEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return str(obj)
+
+        # Let the base class default method raise the TypeError
+        return json.JSONEncoder.default(self, obj)
+
 
 def main():
     # TODO: Move into class
@@ -50,20 +58,23 @@ def main():
     total_embedded = 0
 
     items = []
-    for item in engine.results.items:
-        if item.parent is not None:
-            total_embedded += 1
-        else:
-            items += item.get_dump()
-            total_found += 1
+    name_hints = []
 
-    print(f"Found {total_found} items and {total_embedded} embedded items")
+    for item in engine.program.items:
+        items += item.get_dump()
+        total_found += 1
 
-    output = {"info": info, "items": items}
+        # TODO: Move name hints into a generic object rather than per item
+        if item.name_hints:
+            name_hints += item.name_hints
+
+    print(f"Found {total_found} items")
+
+    output = {"info": info, "items": items, "name_hints": name_hints}
 
     # TODO: Wrap the output with some data about the input file
     with open("output.json", "w") as fh:
-       fh.write(json.dumps(output))
+       fh.write(json.dumps(output, cls=TextEncoder))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ setuptools.setup(
         "Development Status :: 4 - Beta",
     ],
     install_requires=[
+        'capstone',
         'construct',
         'pefile',
         'PyYAML',
