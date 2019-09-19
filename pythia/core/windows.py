@@ -43,28 +43,12 @@ class PEHandler(object):
         # TODO: Create our own logger
         self.logger = logger
         self.context = context
-        self._reset_queues(reset_visited=True)
 
         if filename:
             self._from_file(filename)
 
         elif pe:
             self._from_pefile(pe)
-
-    def _reset_queues(self, reset_visited=False):
-        """
-        Initialise (or reset) the local work queues.  By default the queue
-        of visited locations is not reset, as this should only occur once at
-        startup.
-        """
-
-        # TODO: Scrap me in favour of a work queue object
-
-        if reset_visited:
-            self.visited = set()
-
-        self.candidates = {}
-        self.found = []
 
     def _from_pefile(self, pe):
         """
