@@ -43,6 +43,7 @@ def main():
     parser.add_argument("file", help="portable executable file to process")
     args = parser.parse_args()
 
+    # TODO: Catch exceptions and output an error
     engine = DelphiParser(filename=args.file, debug=args.verbose)
 
     # TODO: Add Delphi version etc.
@@ -58,19 +59,14 @@ def main():
     total_embedded = 0
 
     items = []
-    name_hints = []
 
     for item in engine.program.items:
         items += item.get_dump()
         total_found += 1
 
-        # TODO: Move name hints into a generic object rather than per item
-        if item.name_hints:
-            name_hints += item.name_hints
-
     print(f"Found {total_found} items")
 
-    output = {"info": info, "items": items, "name_hints": name_hints}
+    output = {"info": info, "items": items, "name_hints": engine.program.name_hints}
 
     # TODO: Wrap the output with some data about the input file
     with open("output.json", "w") as fh:

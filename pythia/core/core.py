@@ -50,14 +50,47 @@ class DelphiParser(object):
 
 class DelphiProgram(object):
 
+    # These may be set as parsing progresses.  Depending on what data is passed, some
+    # of these will remain unset.  For example, license and unit information will not
+    # be available if a single code section is parsed.
     license = None
     units = None
+    header_length = None
     items = []
     name_hints = []
 
     # A list of pythia.core.objects.Section objects
     code_sections = []
     data_sections = []
+    object_section = None
+
+    # Will be a VersionHelper instance
+    version = None
+
+    def has_section(self, name):
+        section = self.get_section(name)
+
+        if section is not None:
+            return True
+
+        return False
+
+    def get_section(self, name):
+        if name is None:
+            raise ArgumentException("Need a section name")
+
+        for s in self.code_sections:
+            if s.name == name:
+                return s
+
+        for s in self.data_sections:
+            if s.name == name:
+                return s
+
+        return None
+
+    def add_name_hint(self, va, name):
+        self.name_hints.append({ 'va': va, 'name': name })
 
     # TODO: Add version so that parsers know which Delphi to target
 

@@ -7,7 +7,6 @@ from uuid import UUID
 from .utils import *
 
 # TODO: Change naming to be more pythonic, away from Type_tkMethod etc.
-# TODO: a1288da01ac9daf1ad58336a7ab4ba99c00911ebbe9b900537a634bfc6215a4f has extra data (what version of Delphi is this?)
 
 class ValidationError(Exception):
     pass
@@ -22,10 +21,11 @@ class Section:
     # Where in memory would this section be loaded?
     load_address = None
 
-    def __init__(self, virtual_address, size, data, name=None):
+    def __init__(self, virtual_address, size, mapped_data, stream_data, name=None):
         self.virtual_address = virtual_address
         self.size = size
-        self.data = data
+        self.mapped_data = mapped_data
+        self.stream_data = stream_data
         self.name = name
 
     def contains_va(self, va):
@@ -75,21 +75,23 @@ class PESection(Section):
         # Map the data and keep only the relevant parts
         if mapped_data is None:
             mapped_data = self._section.pe.get_memory_mapped_image()
-        data = io.BytesIO(mapped_data[section.VirtualAddress : section.VirtualAddress + section.SizeOfRawData])
+
+        stream_data = io.BytesIO(mapped_data[section.VirtualAddress : section.VirtualAddress + section.SizeOfRawData])
+        mapped_data = mapped_data[section.VirtualAddress : section.VirtualAddress + section.SizeOfRawData]
 
         # pefile doesn't remove the null padding, trim any whitespace
         # TODO: Handle decoding exceptions
         # TODO: Validate sensible character set
         name = section.Name.rstrip(b" \r\n\0").decode("ascii")
 
-        super().__init__(section.VirtualAddress, section.SizeOfRawData, data, name=name)
+        super().__init__(section.VirtualAddress, section.SizeOfRawData, mapped_data, stream_data, name=name)
 
 
 class BaseParser:
 
     # TODO: Consider adding "relations", that can easily be enumerated
 
-    def __init__(self, section, virtual_address, delphi_program=None, work_queue=None, parent=None):
+    def __init__(self, section, virtual_address, context, work_queue=None, parent=None):
         """
 
         :param stream:
@@ -101,10 +103,8 @@ class BaseParser:
         self.fields = OrderedDict()
 
         self.section = section
-        self.stream = section.data
-
-        # If provided, parsers can directly influence output, e.g. by adding name hints
-        self.delphi_program = delphi_program
+        self.stream = section.stream_data
+        self.context = context
 
         # If provided, parsers can append to the work queue, e.g. position & type of other items
         self.work_queue = work_queue
@@ -117,20 +117,17 @@ class BaseParser:
         self.related = {}
         self.embedded = []
 
-        # The parser can store a list of VA / suggested names
-        self.name_hints = []
-
         # TODO: Consider calling a setup() class here which can be defined in concrete classes
         #       No parsers currently require this, so skipped.
 
-        self.logger.debug("Created a new object at VA 0x{:08x}, section offset 0x{:08x}".format(self.virtual_address, self.start))
+        #self.logger.debug("Created a new object at VA 0x{:08x}, section offset 0x{:08x}".format(self.virtual_address, self.start))
 
         # Needs to be implemented by concrete classes
         self.parse()
 
         # TODO: Check for alignment bytes, either 0x90 or 0x8BC0 or 0x8D4000.  Not all items are
         #       fully parsed, so can't do this here.  Might be better in utility scripts for IDA
-        #       or Ghidra.
+        #       or Ghidra.  This will let us spot when additional data has not been parsed.
 
     def _init_logging(self):
         """
@@ -147,7 +144,6 @@ class BaseParser:
 
         # This does not allow numeric arguments, if these are required in
         # future the code will need updating.
-        # TODO: Would this be better at class level?  Test performance
         # TODO: Handling of C strings (zero terminated)
         valid = list("xB?HILQspGq")
 
@@ -200,7 +196,7 @@ class BaseParser:
 
         # Parse the data
         va = self.section.va_from_offset(self.offset)
-        embedded = obj(self.section, va, delphi_program=self.delphi_program, work_queue=self.work_queue, parent=self)
+        embedded = obj(self.section, va, self.context, work_queue=self.work_queue, parent=self)
 
         # Add the object to fields
         size = len(embedded)
@@ -250,7 +246,7 @@ class BaseParser:
         if offset is not None:
             va = self.section.va_from_offset(offset)
 
-        self.name_hints.append({ 'va': va, 'name': name })
+        self.context.add_name_hint(va, name)
 
     def get_dump(self):
         items = []
@@ -300,12 +296,10 @@ class UnitTable(BaseParser):
         self.parse_fields("II", fields)
 
         self.logger.debug("got number of units {}".format(self.fields["NumUnits"]["data"]))
-        self.logger.debug(self.fields["SelfPtr"])
 
         # Calculate the distance between what is pointed to and the location of the SelfPtr
         distance = self.fields["SelfPtr"]["data"] - self.fields["SelfPtr"]["va"]
 
-        self.logger.debug("distance is {}".format(distance))
         if distance != 4 and distance != 20:
             raise ValidationError("Error parsing unit initialisation table, got distance %d", distance)
 
@@ -314,7 +308,6 @@ class UnitTable(BaseParser):
             extra_fields = ["NumTypes", "TypesPtr", "NumUnitNames", "UnitNamesPtr"]
             self.parse_fields("IIII", extra_fields)
 
-        self.logger.debug(self)
         i = 0
         while i < self.fields["NumUnits"]["data"]:
             self.embed(f"unit_{i}", UnitTableEntry)
@@ -334,8 +327,8 @@ class UnitTableEntry(BaseParser):
 
         # We can only validate these pointers if we have full information about the executable
         # and all of the sections it contains.
-        if not self.delphi_program:
-            raise ValidationError("Can't validate without context, pass delphi_program on construction")
+        if not self.context:
+            raise ValidationError("Can't validate without context, pass context on construction")
 
         if ptr["data"] == 0:
             return True
@@ -343,11 +336,11 @@ class UnitTableEntry(BaseParser):
         # Slightly different validation for the unit initialisation table, because Delphi >2010
         # generates multiple code sections (.text / .itext) and the pointer could be to either,
         # or a data section.
-        for s in self.delphi_program.code_sections:
+        for s in self.context.code_sections:
             if s.contains_va(ptr["data"]):
                 return True
 
-        for s in self.delphi_program.data_sections:
+        for s in self.context.data_sections:
             if s.contains_va(ptr["data"]):
                 return True
 
@@ -484,23 +477,72 @@ class MethodTable(BaseParser):
 
         self.parse_fields("H", [ "num_methods"])
 
+        # TODO: Make an embed_many function
         i = 0
         while i < self.fields["num_methods"]["data"]:
-            self.embed("method_{}".format(i), MethodEntry)
+            self.embed("method_{}".format(i), MethodEntryA)
+            self.logger.debug("embedded method {}".format(i))
+            self.logger.debug(self)
             i += 1
 
-        # TODO: For modern Delphi (what versions?) there is an additional WORD with
-        #       a count, then array of ptrMethodEntryNew (DWORD) / flags (DWORD)
-        #       Delphi 2010+ (checked a D2010 sample) - do we have a D2009 sample?
-        #       Was this an Embarcadero addition?
+        # For Delphi 2010 onwards there is an additional WORD with a count of
+        # new style method entry items.
+        # TODO: Parse these
+        if self.context.version.minimum >= 14:
+            self.parse_fields("H", [ "num_methods_new"])
+            i = 0
+            while i < self.fields["num_methods_new"]["data"]:
+                self.embed("method_{}".format(i), MethodEntryB)
+                i += 1
 
-
-class MethodEntry(BaseParser):
+class MethodEntryA(BaseParser):
+    """
+    Up to and including Delphi 2009
+    """
 
     def parse(self):
         fields = ["size", "function_ptr", "name"]
         self.parse_fields("HIp", fields)
 
+        # Consume any extra bytes
+        count = 2 + 4 + self.fields["name"]["size"]
+        self.parse_bytes("extra_data", self.fields["size"]["data"] - count)
+
+class MethodEntryB(BaseParser):
+    """
+    Delphi 2010 onwards, this is a list of pointers to MethodEntryC objects
+    with an unknown DWORD, potentially flags.
+    """
+    def parse(self):
+        fields = ["entry_ptr", "unk1"]
+        self.parse_fields("II", fields)
+        self.add_related(self.fields["entry_ptr"]["data"], MethodEntryC)
+
+class MethodEntryC(BaseParser):
+    """
+    """
+    def parse(self):
+        fields = ["size", "function_ptr", "name"]
+        # Plus extra data that looks like argument types
+
+        #  10 bytes unknown
+        #  4 bytes - type pointer
+        #  2 bytes - unknown (possibly argument number?)
+
+        #  2 bytes unknown
+        #  4 bytes - type pointer
+        #  8 bytes unknown
+        #  2 bytes unknown (possibly argument number?)
+        #  name
+        #  3 unknown bytes
+        #  4 bytes - type pointer
+
+        self.parse_fields("HIp", fields)
+        count = 2 + 4 + self.fields["name"]["size"]
+        self.parse_bytes("extra_data", self.fields["size"]["data"] - count)
+
+        # TODO: Parse the extra data, which is name and type information for return type
+        #       and arguments.
 
 class FieldTable(BaseParser):
 
@@ -512,7 +554,6 @@ class FieldTable(BaseParser):
             self._parse_type_a()
 
         else:
-            # FIXME: Implement parsing for legacy fields
             self._parse_type_b()
 
         # TODO: Make field data accessible at class level
@@ -553,8 +594,6 @@ class FieldEntryA(BaseParser):
         # TODO: Validate name is ASCII or raise ValidationError
 
         self.add_related(self.fields["typeinfo_ptr"]["data"], TypeInfo, dereference=True)
-
-        # TODO: a021a2ac0faf60ee26863b85f86e88c5 contains a Pascal string that seems to be UTF-8?
 
         # TODO: is this extra data valid for older versions of Delphi?
 

@@ -3,11 +3,13 @@ Various helpers to provide utility functions which can also be used from other c
 """
 import logging
 import pefile
+import re
 from binascii import unhexlify
 from capstone import *
 from capstone.x86 import *
 from .structures import packageinfo
 from .objects import UnitTable
+from .utils import unpack_stream
 
 class Helper(object):
     def __init__(self):
@@ -181,6 +183,7 @@ class UnitInitHelper(Helper):
                 if isn.mnemonic != "call":
                     return None
 
+                # TODO: Add a name hint to the overall program for SysInit function
                 return location
 
             if isn.mnemonic != "mov":
@@ -202,19 +205,178 @@ class UnitInitHelper(Helper):
 
         return None
 
-    def parse_init_table(self, section, va, delphi_program):
+    def parse_init_table(self, section, va, context):
         """
         Given a PE section and virtual address, parse the unit initialisation table and
         return it to the caller.  Returns None if there are errors parsing.
         """
         # TODO: Also pass the work queue here, so additional items can be
         #       added for parsing
-        init_table = UnitTable(section, va, delphi_program=delphi_program)
-
-        self.logger.debug(init_table)
+        init_table = UnitTable(section, va, context=context)
         return init_table
 
     # TODO: Consider allowing only brute force mechanism, so the code can run without Capstone
+
+
+class VersionHelper(Helper):
+
+    # See: http://docwiki.embarcadero.com/RADStudio/Rio/en/Compiler_Versions
+    versions = {
+        #1: { 'name': 'Delphi 1', 'ver': 'VER80' }, # No support for Delphi 1 or 2 in this tool
+        #2: { 'name': 'Delphi 2', 'ver': 'VER90' },
+        3: { 'name': 'Delphi 3', 'ver': 'VER100' },
+        4: { 'name': 'Delphi 4', 'ver': 'VER120' },
+        5: { 'name': 'Delphi 5', 'ver': 'VER130' },
+        6: { 'name': 'Delphi 6', 'ver': 'VER140' },
+        7: { 'name': 'Delphi 7 / 7.1', 'ver': 'VER150' },
+        #8: { 'name': 'Delphi 8 for .Net', 'ver': 'VER160' }, # No .Net support in this tool
+        9: { 'name': 'Delphi 2005', 'ver': 'VER170' },
+        10: { 'name': 'Delphi 2006', 'ver': 'VER180' },
+        11: { 'name': 'Delphi 2007', 'ver': 'VER185' },
+        #11: { 'name': 'Delphi 2007 for .Net', 'ver': 'VER190' },
+        12: { 'name': 'Delphi 2009', 'ver': 'VER200' },
+        # There is no version 13
+        14: { 'name': 'Delphi 2010', 'ver': 'VER210' },
+        15: { 'name': 'Delphi XE', 'ver': 'VER220' },
+        16: { 'name': 'Delphi XE2', 'ver': 'VER230' },
+        17: { 'name': 'Delphi XE3', 'ver': 'VER240' },
+        18: { 'name': 'Delphi XE4', 'ver': 'VER250' },
+        19: { 'name': 'Delphi XE5', 'ver': 'VER260' },
+        20: { 'name': 'Delphi XE6', 'ver': 'VER270' },
+        21: { 'name': 'Delphi XE7', 'ver': 'VER280' },
+        22: { 'name': 'Delphi XE8', 'ver': 'VER290' },
+        23: { 'name': 'Delphi 10 Seattle', 'ver': 'VER300' },
+        24: { 'name': 'Delphi 10.1 Berlin', 'ver': 'VER310' },
+        25: { 'name': 'Delphi 10.2 Tokyo', 'ver': 'VER320' },
+        26: { 'name': 'Delphi 10.3 Rio', 'ver': 'VER330' },
+    }
+    minimum = None
+    maximum = None
+
+    def __init__(self, context):
+        super().__init__()
+        self._context = context
+        self.minimum = 0
+        self.maximum = 999
+        self.guess_version()
+
+    def guess_version(self):
+
+        # TODO: Have all version checks return a dict from _select_versions(), so that
+        #       we can compare at the end and ensure there are no outliers (e.g. one
+        #       method says Delphi 3-5 and another says XE-XE4).
+
+        # Check section names
+        # Early versions uses CODE for code section and DATA for data (confirmed to 2005)
+        # Delphi 2006+ uses .text for code section
+        if self._context.has_section(name=".text"):
+            self._update_minimum(10)
+
+        if self._context.has_section(name="CODE"):
+            self._update_maximum(9)
+
+        # Delayed import section, introduced with Delphi 2010
+        # See: https://www.drbob42.com/examines/examinC1.htm
+        if self._context.has_section(name=".didata"):
+            self._update_minimum(14)
+
+        # Check .rdata section for a compiler string, which seems to have been introduced
+        # around XE7, which matches rules from Detect It Easy.
+        rdata = self._context.get_section(".rdata")
+        if rdata is None:
+            self.logger.error("Did not find a section named .rdata, this is not typical for Delphi")
+        else:
+            # Example version string below, the first number inside the brackets
+            # aligns to the versions used in pythia.
+            #
+            # Embarcadero Delphi for Win32 compiler version 28.0 (21.0.17707.5020)
+            pattern = re.compile(b"Embarcadero Delphi for Win32 compiler version \d\d\.\d \((\d\d)\.")
+            result = pattern.search(rdata.mapped_data)
+            if result:
+                version = int(result.group(1))
+                self._update_minimum(version)
+                self._update_maximum(version)
+            else:
+                # If there is no version string it must be Delphi XE6 or below
+                self._update_maximum(20)
+
+        names = []
+        for s in self._context.code_sections:
+            names.append(s.name)
+
+        for s in self._context.data_sections:
+            names.append(s.name)
+
+        # Scan for "extra data" markers, which are part of many RTTI objects after
+        # Delphi 10.  These come just before alignment padding, so we search for them
+        # on 4 byte boundaries.  The actual bytes are:
+        #  - 02 00  - 2 bytes of extra data (e.g. these two, no further data)
+        #  - 8b c0  - alignment padding
+        section = self._context.object_section
+        found = 0
+        i = 0
+        while i < section.size - 4:
+            section.stream_data.seek(i)
+            (data, ) = unpack_stream("I", section.stream_data)
+            if data == 0xc08b0002:
+                found += 1
+
+            i += 4
+
+        if found > 10:
+            self._update_minimum(14)
+
+        # TODO: Improve parsing of unit table so that it can be iterated, then
+        #       look for things like SysInit to see when this was introduced
+        #if self._context.units:
+        #    self.logger.info(self._context.units)
+
+        # Additional version detection strategies:
+        #  - Size of various vftables / objects
+        #  - "string" vs "String" (from DIE)
+
+        # TODO: SHIFT THIS TO VERSION GUESSING CODE
+        # Get crude Delphi version (<2010 or >=2010), which allows targeting of vftable search
+        # strategy.  We check if the Unit Initialisation Table has a member named NumTypes,
+        # which is the first of four extra fields introduced by Delphi 2010.
+#        try:
+#            num_types = init_table.fields["NumTypes"]
+#            self.logger.info("Executable seems to be generated by Delphi 2010+")
+#            modern_delphi = True
+#        except KeyError:
+#            modern_delphi = False
+#            self.logger.info("Executable seems to be generated by an earlier version of Delphi (pre 2010)")
+        # END TODO
+
+        # Check size of objects.  This scan is not intended to be complete,
+        # and skips any data which fails validation.  More thorough scanning
+        # is conducted later.
+        self._select_versions(minimum=self.minimum, maximum=self.maximum)
+
+    def _update_minimum(self, new):
+        if new > self.minimum:
+            self.minimum = new
+
+    def _update_maximum(self, new):
+        if new < self.maximum:
+            self.maximum = new
+
+    def _select_versions(self, minimum=0, maximum=999):
+        """
+        Select all items from the known version list that meet minimum / maximum
+        criteria.
+        """
+
+        if minimum is 0 and maximum is 999:
+            raise AttributeError("Need minimum or maximum")
+
+        candidates = {}
+        for ver,data in self.versions.items():
+            if ver >= minimum and ver <= maximum:
+                candidates[ver] = data
+
+        self.logger.debug("returning candidate versions: {}".format(candidates))
+        return candidates
 
 
 class WorkQueue(Helper):
@@ -244,10 +406,21 @@ class WorkQueue(Helper):
         self._queue.append(info)
         self._visited.add(location)
 
-    def get_item(self):
+    def get_item(self, obj_type=None):
 
         # TODO: Investigate whether making this a generator would be more efficient, and if
         #       yield supports list modification during enumeration.
+
+        # The caller can request a specific object type, e.g. to only parse
+        # vftables without also parsing related objects.
+        if obj_type:
+            for i in range(0, len(self._queue)):
+                if self._queue[i]["item_type"] == obj_type:
+                    return self._queue.pop(i)
+
+            return None
+
+        # Otherwise return the first item in the list
         if self._queue:
             return self._queue.pop(0)
 
