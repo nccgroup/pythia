@@ -95,9 +95,13 @@ Use the `--save-tree` option to generate a file like:
 
 # Supported Delphi versions
 
-The current aim is for this tool to support Delphi version 3 (released 1997) and above.  A number of changes would be required for Delphi 2 (released 1996).
+The current aim is for this tool to support Delphi version 3 (released 1997) and above.  A number of changes would be required for Delphi 2 (released 1996).  At present only x86 executables are supported.
 
-There is no aim to support other compilers, e.g. FreePascal, however this could be investigated if required.
+A list of Delphi versions is available from the [Embarcadero website](http://docwiki.embarcadero.com/RADStudio/Rio/en/Compiler_Versions).
+
+There is no aim to support other compilers, e.g. FreePascal, however this could be investigated if required.  Delphi compilers that target .Net or other frameworks are not supported.
+
+Executables which have been modified or packed will not correctly parse.  Unpack these before analysing with pythia.
 
 # Future aims
 
