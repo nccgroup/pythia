@@ -27,11 +27,10 @@ def main():
 
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
-        "-p",
-        "--profile",
+        "-o",
+        "--output",
         type=str,
-        help="set the version of Delphi (default: auto)",
-        default="auto",
+        help="set the version of Delphi (default: <input>-pythia.json)",
     )
     parser.add_argument(
         "-v",
@@ -50,7 +49,6 @@ def main():
     info = {
         "creator": "pythia, a python tool to parse information from Delphi executables",
         "pythia_version": VERSION_STRING,
-        "profile": args.profile,
         # "image_base": pe.OPTIONAL_HEADER.ImageBase
     }
 
@@ -68,8 +66,11 @@ def main():
 
     output = {"info": info, "items": items, "name_hints": engine.program.name_hints}
 
+    if args.output is None:
+        args.output = "{}-pythia.json".format(args.file)
+
     # TODO: Wrap the output with some data about the input file
-    with open("output.json", "w") as fh:
+    with open(args.output, "w") as fh:
        fh.write(json.dumps(output, cls=TextEncoder))
 
 
