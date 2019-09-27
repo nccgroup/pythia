@@ -266,6 +266,19 @@ class VersionHelper(Helper):
         #       we can compare at the end and ensure there are no outliers (e.g. one
         #       method says Delphi 3-5 and another says XE-XE4).
 
+        # Length of the standard vftable (before class methods) varies depending
+        # on Delphi version
+        if self._context.header_length == 64:
+            self._update_minimum(3)
+            self._update_maximum(3)
+
+        elif self._context.header_length == 76:
+            self._update_minimum(4)
+            self._update_maximum(11)
+
+        elif self._context.header_length == 88:
+            self._update_minimum(12)
+
         # Check section names
         # Early versions uses CODE for code section and DATA for data (confirmed to 2005)
         # Delphi 2006+ uses .text for code section
