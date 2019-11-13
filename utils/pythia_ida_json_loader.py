@@ -6,7 +6,6 @@ with open("output.json", "r") as fh:
     data = json.load(fh)
 
 for item in data["items"]:
-    print(item)
     MakeComm(item['va'], item['name'].encode("ascii"))
 
     if item["type"] == "p":
@@ -23,6 +22,10 @@ for item in data["items"]:
         MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
         MakeWord(item["va"])
 
+    elif item["type"] == "B":
+        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
+        MakeByte(item["va"])
+
     elif item["type"] == "G":
         MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
         MakeDword(item["va"])
@@ -33,6 +36,22 @@ for item in data["items"]:
 
         comm = "GUID: {}".format(item["data"])
         MakeComm(item['va'], comm)
+
+seen = set()
+for item in data["name_hints"]:
+    if item["va"] in seen:
+        print("Already renamed 0x{:08x}".format(item["va"]))
+        comm = Comment(item["va"])
+        if comm:
+            comm += "\n{}".format(item["name"])
+        else:
+            comm = item["name"]
+        MakeComm(item["va"], str(comm))
+        continue
         
+    MakeNameEx(item["va"], str(item["name"]), SN_NOWARN)
+    seen.add(item["va"])
+
+print("Finished renaming")
 
 #idaapi.refresh_strlist(0, 1)
