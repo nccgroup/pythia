@@ -25,17 +25,17 @@ def extract_pascal_string(stream, offset):
     return (text, length)
 
 
-def unpack_stream(format, stream, offset=None):
+def unpack_stream(fmt, stream, offset=None):
     """
     Read from a stream using struct.unpack.
 
-    :param format:
+    :param fmt:
     :param stream:
     :return:
     """
-    size = struct.calcsize(format)
+    size = struct.calcsize(fmt)
     if offset is not None:
         stream.seek(offset)
 
     buf = stream.read(size)
-    return struct.unpack(format, buf)
+    return struct.unpack(fmt, buf)

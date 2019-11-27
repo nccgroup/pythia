@@ -1,6 +1,7 @@
 import logging
 from binascii import unhexlify
 from .windows import PEHandler
+from .objects import Vftable
 
 
 class DelphiParser(object):
@@ -22,7 +23,9 @@ class DelphiParser(object):
 
         if filename:
             # TODO: Auto detect input file type and use the right handler
-            self.handler = PEHandler(logger=self.logger, context=self.program, filename=filename)
+            self.handler = PEHandler(
+                logger=self.logger, context=self.program, filename=filename
+            )
 
         elif pe:
             self.handler = PEHandler(logger=self.logger, context=self.program, pe=pe)
@@ -48,6 +51,7 @@ class DelphiParser(object):
             elif debug > 1:
                 self.logger.setLevel(logging.DEBUG)
 
+
 class DelphiProgram(object):
 
     # These may be set as parsing progresses.  Depending on what data is passed, some
@@ -56,7 +60,7 @@ class DelphiProgram(object):
     license = None
     units = None
     header_length = None
-    items = []
+    items = {}
     name_hints = []
 
     # A list of pythia.core.objects.Section objects
@@ -90,7 +94,33 @@ class DelphiProgram(object):
         return None
 
     def add_name_hint(self, va, name):
-        self.name_hints.append({ 'va': va, 'name': name })
+        # TODO: Ensure these are unique
+        self.name_hints.append({"va": va, "name": name})
+
+    def add_item(self, va, obj):
+
+        # TODO: Check there is not an object here already
+        self.items[va] = obj
+
+    def get_item(self, va):
+        try:
+            return self.items[va]
+        except KeyError:
+            return None
+
+    def iter_items(self, obj_type=None):
+        for va, obj in self.items.items():
+            if not obj_type:
+                yield obk
+            elif type(obj) == obj_type:
+                yield obj
+
+    def get_class(self, name):
+        for obj in self.iter_items(obj_type=Vftable):
+            if obj.name == name:
+                return obj
+
+        return None
 
     # TODO: Add version so that parsers know which Delphi to target
 

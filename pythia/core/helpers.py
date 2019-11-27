@@ -5,11 +5,12 @@ import logging
 import pefile
 import re
 from binascii import unhexlify
-from capstone import *
-from capstone.x86 import *
+from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+from capstone.x86 import X86_OP_REG, X86_OP_IMM
 from .structures import packageinfo
-from .objects import UnitTable
+from .objects import UnitTable, PackageInfo
 from .utils import unpack_stream
+
 
 class Helper(object):
     def __init__(self):
@@ -20,7 +21,7 @@ class Helper(object):
         Initialise a logger with the name of this class, allowing finer control over which debug
         messages are suppressed.
         """
-        name = f'{self.__module__}.{self.__class__.__qualname__}'
+        name = f"{self.__module__}.{self.__class__.__qualname__}"
         self.logger = logging.getLogger(name)
 
 
@@ -57,6 +58,7 @@ class PackageInfoHelper(Helper):
     Utility class to parse PACKAGEINFO data to a list of required & contained
     units.
     """
+
     def __init__(self):
         # TODO: Move to a static function that can be called from anywhere
         self.logger = logging.getLogger("pythia.{}".format(self.__class__.__name__))
@@ -93,7 +95,7 @@ class PEHelper(Helper):
         """
         ep = self._pe.OPTIONAL_HEADER.AddressOfEntryPoint
         ep_rva = ep + self._pe.OPTIONAL_HEADER.ImageBase
-        data = self._pe.get_memory_mapped_image()[ep:ep+num_bytes]
+        data = self._pe.get_memory_mapped_image()[ep : ep + num_bytes]
         return data
 
     def get_resource_data(self, resource_type, resource_name):
@@ -222,33 +224,33 @@ class VersionHelper(Helper):
 
     # See: http://docwiki.embarcadero.com/RADStudio/Rio/en/Compiler_Versions
     versions = {
-        #1: { 'name': 'Delphi 1', 'ver': 'VER80' }, # No support for Delphi 1 or 2 in this tool
-        #2: { 'name': 'Delphi 2', 'ver': 'VER90' },
-        3: { 'name': 'Delphi 3', 'ver': 'VER100' },
-        4: { 'name': 'Delphi 4', 'ver': 'VER120' },
-        5: { 'name': 'Delphi 5', 'ver': 'VER130' },
-        6: { 'name': 'Delphi 6', 'ver': 'VER140' },
-        7: { 'name': 'Delphi 7 / 7.1', 'ver': 'VER150' },
-        #8: { 'name': 'Delphi 8 for .Net', 'ver': 'VER160' }, # No .Net support in this tool
-        9: { 'name': 'Delphi 2005', 'ver': 'VER170' },
-        10: { 'name': 'Delphi 2006', 'ver': 'VER180' },
-        11: { 'name': 'Delphi 2007', 'ver': 'VER185' },
-        #11: { 'name': 'Delphi 2007 for .Net', 'ver': 'VER190' },
-        12: { 'name': 'Delphi 2009', 'ver': 'VER200' },
+        # 1: { 'name': 'Delphi 1', 'ver': 'VER80' }, # No support for Delphi 1 or 2 in this tool
+        # 2: { 'name': 'Delphi 2', 'ver': 'VER90' },
+        3: {"name": "Delphi 3", "ver": "VER100"},
+        4: {"name": "Delphi 4", "ver": "VER120"},
+        5: {"name": "Delphi 5", "ver": "VER130"},
+        6: {"name": "Delphi 6", "ver": "VER140"},
+        7: {"name": "Delphi 7 / 7.1", "ver": "VER150"},
+        # 8: { 'name': 'Delphi 8 for .Net', 'ver': 'VER160' }, # No .Net support in this tool
+        9: {"name": "Delphi 2005", "ver": "VER170"},
+        10: {"name": "Delphi 2006", "ver": "VER180"},
+        11: {"name": "Delphi 2007", "ver": "VER185"},
+        # 11: { 'name': 'Delphi 2007 for .Net', 'ver': 'VER190' },
+        12: {"name": "Delphi 2009", "ver": "VER200"},
         # There is no version 13
-        14: { 'name': 'Delphi 2010', 'ver': 'VER210' },
-        15: { 'name': 'Delphi XE', 'ver': 'VER220' },
-        16: { 'name': 'Delphi XE2', 'ver': 'VER230' },
-        17: { 'name': 'Delphi XE3', 'ver': 'VER240' },
-        18: { 'name': 'Delphi XE4', 'ver': 'VER250' },
-        19: { 'name': 'Delphi XE5', 'ver': 'VER260' },
-        20: { 'name': 'Delphi XE6', 'ver': 'VER270' },
-        21: { 'name': 'Delphi XE7', 'ver': 'VER280' },
-        22: { 'name': 'Delphi XE8', 'ver': 'VER290' },
-        23: { 'name': 'Delphi 10 Seattle', 'ver': 'VER300' },
-        24: { 'name': 'Delphi 10.1 Berlin', 'ver': 'VER310' },
-        25: { 'name': 'Delphi 10.2 Tokyo', 'ver': 'VER320' },
-        26: { 'name': 'Delphi 10.3 Rio', 'ver': 'VER330' },
+        14: {"name": "Delphi 2010", "ver": "VER210"},
+        15: {"name": "Delphi XE", "ver": "VER220"},
+        16: {"name": "Delphi XE2", "ver": "VER230"},
+        17: {"name": "Delphi XE3", "ver": "VER240"},
+        18: {"name": "Delphi XE4", "ver": "VER250"},
+        19: {"name": "Delphi XE5", "ver": "VER260"},
+        20: {"name": "Delphi XE6", "ver": "VER270"},
+        21: {"name": "Delphi XE7", "ver": "VER280"},
+        22: {"name": "Delphi XE8", "ver": "VER290"},
+        23: {"name": "Delphi 10 Seattle", "ver": "VER300"},
+        24: {"name": "Delphi 10.1 Berlin", "ver": "VER310"},
+        25: {"name": "Delphi 10.2 Tokyo", "ver": "VER320"},
+        26: {"name": "Delphi 10.3 Rio", "ver": "VER330"},
     }
     minimum = None
     maximum = None
@@ -297,13 +299,17 @@ class VersionHelper(Helper):
         # around XE7, which matches rules from Detect It Easy.
         rdata = self._context.get_section(".rdata")
         if rdata is None:
-            self.logger.error("Did not find a section named .rdata, this is not typical for Delphi")
+            self.logger.error(
+                "Did not find a section named .rdata, this is not typical for Delphi"
+            )
         else:
             # Example version string below, the first number inside the brackets
             # aligns to the versions used in pythia.
             #
             # Embarcadero Delphi for Win32 compiler version 28.0 (21.0.17707.5020)
-            pattern = re.compile(b"Embarcadero Delphi for Win32 compiler version \d\d\.\d \((\d\d)\.")
+            pattern = re.compile(
+                b"Embarcadero Delphi for Win32 compiler version \d\d\.\d \((\d\d)\."
+            )
             result = pattern.search(rdata.mapped_data)
             if result:
                 version = int(result.group(1))
@@ -330,8 +336,8 @@ class VersionHelper(Helper):
         i = 0
         while i < section.size - 4:
             section.stream_data.seek(i)
-            (data, ) = unpack_stream("I", section.stream_data)
-            if data == 0xc08b0002:
+            (data,) = unpack_stream("I", section.stream_data)
+            if data == 0xC08B0002:
                 found += 1
 
             i += 4
@@ -341,7 +347,7 @@ class VersionHelper(Helper):
 
         # TODO: Improve parsing of unit table so that it can be iterated, then
         #       look for things like SysInit to see when this was introduced
-        #if self._context.units:
+        # if self._context.units:
         #    self.logger.info(self._context.units)
 
         # Additional version detection strategies:
@@ -352,13 +358,13 @@ class VersionHelper(Helper):
         # Get crude Delphi version (<2010 or >=2010), which allows targeting of vftable search
         # strategy.  We check if the Unit Initialisation Table has a member named NumTypes,
         # which is the first of four extra fields introduced by Delphi 2010.
-#        try:
-#            num_types = init_table.fields["NumTypes"]
-#            self.logger.info("Executable seems to be generated by Delphi 2010+")
-#            modern_delphi = True
-#        except KeyError:
-#            modern_delphi = False
-#            self.logger.info("Executable seems to be generated by an earlier version of Delphi (pre 2010)")
+        #        try:
+        #            num_types = init_table.fields["NumTypes"]
+        #            self.logger.info("Executable seems to be generated by Delphi 2010+")
+        #            modern_delphi = True
+        #        except KeyError:
+        #            modern_delphi = False
+        #            self.logger.info("Executable seems to be generated by an earlier version of Delphi (pre 2010)")
         # END TODO
 
         # Check size of objects.  This scan is not intended to be complete,
@@ -384,7 +390,7 @@ class VersionHelper(Helper):
             raise AttributeError("Need minimum or maximum")
 
         candidates = {}
-        for ver,data in self.versions.items():
+        for ver, data in self.versions.items():
             if ver >= minimum and ver <= maximum:
                 candidates[ver] = data
 
@@ -393,7 +399,6 @@ class VersionHelper(Helper):
 
 
 class WorkQueue(Helper):
-
     def __init__(self):
         super().__init__()
         self._queue = []
@@ -407,15 +412,15 @@ class WorkQueue(Helper):
             # problem with the current search strategy, unless the Vftable scanning
             # generates too many invalid locations.
             #
-            # Other locationds are added only if there is a pointer to them from another
+            # Other locations are added only if there is a pointer to them from another
             # validated object, so false positives should be minimal except the initial
             # vftable scan.
             #
             # TODO: Uncomment once better debug granularity is available
-            #self.logger.debug(f"Location {location} has already been visited, not adding")
+            # self.logger.debug(f"Location {location} has already been visited, not adding")
             return
 
-        info = { "location": location, "item_type": item_type }
+        info = {"location": location, "item_type": item_type}
         self._queue.append(info)
         self._visited.add(location)
 

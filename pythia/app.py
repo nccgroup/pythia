@@ -6,6 +6,7 @@ import json
 from . import VERSION_STRING
 from .core import DelphiParser
 
+
 class TextEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, bytes):
@@ -58,7 +59,7 @@ def main():
 
     items = []
 
-    for item in engine.program.items:
+    for va, item in engine.program.items.items():
         items += item.get_dump()
         total_found += 1
 
@@ -71,7 +72,7 @@ def main():
 
     # TODO: Wrap the output with some data about the input file
     with open(args.output, "w") as fh:
-       fh.write(json.dumps(output, cls=TextEncoder))
+        fh.write(json.dumps(output, cls=TextEncoder))
 
 
 if __name__ == "__main__":

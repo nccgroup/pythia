@@ -15,9 +15,9 @@ Delphi.
 
 # Author & license
 
-Released as open source by NCC Group Plc - http://www.nccgroup.com/
+A beta version of this tool was released as open source by NCC Group Plc - http://www.nccgroup.com/
 
-Developed by David Cannings (@edeca) david.cannings@nccgroup.com
+Continued development is by David Cannings (@edeca).
 
 http://www.github.com/nccgroup/pythia
 
@@ -127,3 +127,8 @@ Inspect the size of vftables (if possible?) to see how large the offsets are.
 
 Please send me examples of binaries where this tool doesn't work, so it can
 be improved.
+
+# Misc
+## Sample Delphi programs
+
+A number of sample programs to test this tool can be found at: http://delphiforfun.org/default.html
