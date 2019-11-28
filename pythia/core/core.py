@@ -66,6 +66,7 @@ class DelphiProgram(object):
     # A list of pythia.core.objects.Section objects
     code_sections = []
     data_sections = []
+    # Which section contains vftables (e.g. where are the Delphi objects)
     object_section = None
 
     # Will be a VersionHelper instance
@@ -81,7 +82,7 @@ class DelphiProgram(object):
 
     def get_section(self, name):
         if name is None:
-            raise ArgumentException("Need a section name")
+            raise AttributeError("Need a section name")
 
         for s in self.code_sections:
             if s.name == name:
@@ -123,12 +124,3 @@ class DelphiProgram(object):
         return None
 
     # TODO: Add version so that parsers know which Delphi to target
-
-
-class DelphiClass(object):
-    pass
-
-
-class DelphiUnit(object):
-    pass
-

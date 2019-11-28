@@ -1,9 +1,5 @@
 import io
-import logging
-from collections import OrderedDict
-from struct import unpack, calcsize
-from prettytable import PrettyTable
-from uuid import UUID
+from .parsing import BaseParser
 from .utils import *
 
 # TODO: Change naming to be more pythonic, away from Type_tkMethod etc.
@@ -102,148 +98,25 @@ class PESection(Section):
         )
 
 
-class BaseParser:
+class ExecutableParser(BaseParser):
+    """
+    A customised parser, designed for use with data contained in executable files.  This class
+    is modelled on Windows PE files, and assumes that data is contained within a section with
+    an associated virtual address.
 
-    # TODO: Consider adding "relations", that can easily be enumerated
+    This parser makes it easier to process data when there is a difference between the file offset
+    (in the raw stream) and the virtual address (in the memory mapped data).
+    """
 
-    def __init__(self, section, virtual_address, context, work_queue=None, parent=None):
-        """
+    # TODO: Refactor so that section is inside context, and virtual_address is not needed (or optional)
+    # def __init__(self, stream, context, start_address, work_queue=None, parent=None):
+    def __init__(
+        self, stream, start_address, context=None, work_queue=None, parent=None
+    ):
 
-        :param stream:
-        :param offset: the offset inside the stream, or None to use the current location
-        :return:
-        """
 
-        self._init_logging()
-        self.fields = OrderedDict()
-
-        self.section = section
-        self.stream = section.stream_data
-        self.context = context
-
-        # If provided, parsers can append to the work queue, e.g. position & type of other items
-        self.work_queue = work_queue
-
-        self.virtual_address = virtual_address
-        start = section.offset_from_va(virtual_address)
-        self.start = start
-        self.offset = start
-        self.parent = parent
-        self.related = {}
-        self.embedded = []
-
-        # Optional setup method to be called before parsing takes place. Split out here
-        # in case future refactoring moves parse() from init.
-        self._setup()
-
-        # Needs to be implemented by concrete classes
-        self.parse()
-
-        # TODO: Check for alignment bytes, either 0x90 or 0x8BC0 or 0x8D4000.  Not all items are
-        #       fully parsed, so can't do this here.  Might be better in utility scripts for IDA
-        #       or Ghidra.  This will let us spot when additional data has not been parsed.
-
-    def _setup(self):
-        pass
-
-    def _init_logging(self):
-        """
-        Initialise a logger with the name of this class, allowing finer control over which debug
-        messages are suppressed.
-        """
-        name = f"{self.__module__}.{self.__class__.__qualname__}"
-        self.logger = logging.getLogger(name)
-
-    def parse_fields(self, format, names):
-
-        # TODO: Take an optional start position - right now this assumes all reads are from the last position
-        self.stream.seek(self.offset)
-
-        # This does not allow numeric arguments, if these are required in
-        # future the code will need updating.
-        # TODO: Handling of C strings (zero terminated)
-        valid = list("xB?HILQspGq")
-
-        if not all(c in valid for c in format):
-            raise ValueError("Invalid format string")
-
-        if len(format) != len(names):
-            raise ValueError("Format string length and number of names should match")
-
-        i = 0
-
-        #  This assumes single byte format specifiers (no numbers)
-        for f in format:
-            # TODO: For all reads, check there is enough data first
-            if f == "G":
-                # Special handling for GUIDs
-                size = 16
-                buf = self.stream.read(size)
-                data = str(UUID(bytes_le = buf))
-
-            elif f == "p":
-                # Special handling for Pascal strings
-                (data, raw_length) = extract_pascal_string(self.stream, self.offset)
-                size = raw_length
-
-            else:
-                size = calcsize(f)
-
-                # TODO: Error handling on .read()
-                buf = self.stream.read(size)
-
-                (data,) = unpack(f, buf)
-
-            self.add_field(names[i], data, f, self.offset, size)
-            self.offset += size
-            i += 1
-
-    def parse_bytes(self, name, num_bytes):
-        """
-        Manually consume into a byte array.  There is currently no format specifier for variable
-        length byte data in parse_fields().  This function exists until that is fixed, or we
-        decide there is no requirement for complex format strings.
-        """
-
-        data = self.stream.read(num_bytes)
-        self.add_field(name, data, "B", self.offset, num_bytes)
-        self.offset += num_bytes
-
-    def embed(self, name, obj):
-
-        # Parse the data
-        va = self.section.va_from_offset(self.offset)
-        embedded = obj(
-            self.section, va, self.context, work_queue=self.work_queue, parent=self
-        )
-
-        # Add the object to fields
-        size = len(embedded)
-        self.add_field(name, embedded, None, self.offset, size)
-        self.embedded.append(embedded)
-
-        self.offset += size
-        return embedded
-
-    def embed_many(self, name_prefix, obj, count):
-
-        i = 0
-        while i < count:
-            name = f"{name_prefix}[{i}]"
-            self.embed(name, obj)
-            i += 1
-
-    def add_field(self, name, data, data_type, offset, size):
-        va = self.section.va_from_offset(offset)
-        data = {
-            "name": name,
-            "data": data,
-            "type": data_type,
-            "offset": offset,
-            "va": va,
-            "size": size,
-        }
-        self.fields[name] = data
+        self.virtual_address = context.object_section.va_from_offset(start_address)
+        super().__init__(stream, start_address, context, work_queue, parent)
 
     def add_related(self, va, obj_type, dereference=False):
         """
@@ -257,7 +130,7 @@ class BaseParser:
         # Many Delphi objects are pointers to pointers to objects.  Dereference these here
         # to avoid repeated code.
         if dereference:
-            offset = self.section.offset_from_va(va)
+            offset = self.context.object_section.offset_from_va(va)
             (va,) = unpack_stream("I", self.stream, offset)
 
         self.logger.debug(
@@ -282,69 +155,27 @@ class BaseParser:
             raise ValueError("Need one of va or offset")
 
         if offset is not None:
-            va = self.section.va_from_offset(offset)
+            va = self.context.object_section.va_from_offset(offset)
 
         self.context.add_name_hint(va, name)
 
-    def get_dump(self):
-        items = []
-
-        # TODO: Add depth, so embedded objects are indented one level below in the hierarchy
-
-        for name, data in self.fields.items():
-            # Check if data is derived from BaseParser and get additional
-            # dump if necessary.
-            if isinstance(data["data"], BaseParser):
-                items += data["data"].get_dump()
-            else:
-                items.append(data)
-
-        return items
-
     def __str__(self):
-        table = PrettyTable()
-        data = self.get_dump()
-
-        table.field_names = ["VA", "Name", "Type", "Data", "Size"]
-        for field in data:
-            row = [
-                field["va"],
-                field["name"],
-                field["type"],
-                field["data"],
-                field["size"],
-            ]
-            table.add_row(row)
-
-        return table.get_string()
-
-    def __len__(self):
-        """
-        The length of an instance is the size (in bytes) of the fields it contains.
-
-        :return: size of all contained fields
-        """
-        len = 0
-        for _, data in self.fields.items():
-            len += data["size"]
-
-        return len
-
-    # TODO: dump() method
-    # TODO: pack() method to repack into bytes
+        return super().__str__(offset=self.context.object_section.load_address)
 
 
-class UnitTable(BaseParser):
+class UnitTable(ExecutableParser):
     def parse(self):
         fields = ["NumUnits", "SelfPtr"]
         self.parse_fields("II", fields)
 
         self.logger.debug(
-            "got number of units {}".format(self.fields["NumUnits"]["data"])
+            "Number of units {}".format(self.fields["NumUnits"]["data"])
         )
 
         # Calculate the distance between what is pointed to and the location of the SelfPtr
-        distance = self.fields["SelfPtr"]["data"] - self.fields["SelfPtr"]["va"]
+        distance = self.fields["SelfPtr"][
+            "data"
+        ] - self.context.object_section.va_from_offset(self.fields["SelfPtr"]["offset"])
 
         if distance != 4 and distance != 20:
             raise ValidationError(
@@ -359,7 +190,7 @@ class UnitTable(BaseParser):
         self.embed_many("Unit", UnitTableEntry, self.fields["NumUnits"]["data"])
 
 
-class UnitTableEntry(BaseParser):
+class UnitTableEntry(ExecutableParser):
     def parse(self):
         fields = ["InitialisationPtr", "FinalisationPtr"]
         self.parse_fields("II", fields)
@@ -396,7 +227,7 @@ class UnitTableEntry(BaseParser):
         )
 
 
-class Vftable(BaseParser):
+class Vftable(ExecutableParser):
 
     common = [
         "SelfPtr",
@@ -431,7 +262,7 @@ class Vftable(BaseParser):
 
         # Extract the class name
         # TODO: Validate name
-        name_offset = self.section.offset_from_va(self.fields["ClassName"]["data"])
+        name_offset = self.context.object_section.offset_from_va(self.fields["ClassName"]["data"])
         (self.name, _) = extract_pascal_string(self.stream, name_offset)
 
         # Add a relation to ClassName, which ensures the output contains
@@ -524,7 +355,7 @@ class Vftable(BaseParser):
             except KeyError:
                 pass
 
-        num_methods = (self.section.offset_from_va(lowest) - self.offset) / 4
+        num_methods = (self.context.object_section.offset_from_va(lowest) - self.offset) / 4
         if not num_methods.is_integer():
             self.logger.error(
                 "Could not calculate the number of methods correctly, skipping"
@@ -562,7 +393,7 @@ class Vftable(BaseParser):
 
         for name, info in self.fields.items():
             if name in self.common and name not in ignore:
-                if info["data"] and not self.section.contains_va(info["data"]):
+                if info["data"] and not self.context.object_section.contains_va(info["data"]):
                     raise ValidationError(
                         "Field {} data points outside the code section".format(name)
                     )
@@ -579,7 +410,7 @@ class Vftable(BaseParser):
         return True
 
 
-class ClassName(BaseParser):
+class ClassName(ExecutableParser):
     """
     This is a "fake" object to ensure class names appear in the output and
     can be imported into other tools (e.g. marking up raw data).  The class
@@ -594,7 +425,7 @@ class ClassName(BaseParser):
         # ones only?
 
 
-class MethodTable(BaseParser):
+class MethodTable(ExecutableParser):
     def parse(self):
 
         self.parse_fields("H", ["num_methods"])
@@ -610,7 +441,7 @@ class MethodTable(BaseParser):
             )
 
 
-class MethodEntryA(BaseParser):
+class MethodEntryA(ExecutableParser):
     """
     Up to and including Delphi 2009
     """
@@ -624,7 +455,7 @@ class MethodEntryA(BaseParser):
         self.parse_bytes("extra_data", self.fields["size"]["data"] - count)
 
 
-class MethodEntryB(BaseParser):
+class MethodEntryB(ExecutableParser):
     """
     Delphi 2010 onwards, this is a list of pointers to MethodEntryC objects
     with an unknown DWORD, potentially flags.
@@ -636,7 +467,7 @@ class MethodEntryB(BaseParser):
         self.add_related(self.fields["entry_ptr"]["data"], MethodEntryC)
 
 
-class MethodEntryC(BaseParser):
+class MethodEntryC(ExecutableParser):
     """
     """
 
@@ -664,7 +495,7 @@ class MethodEntryC(BaseParser):
         #       and arguments.
 
 
-class FieldTable(BaseParser):
+class FieldTable(ExecutableParser):
     def parse(self):
 
         self.parse_fields("H", ["header"])
@@ -694,7 +525,7 @@ class FieldTable(BaseParser):
         # TODO: There is additional data following the field entries, work out what this is
 
 
-class FieldEntryA(BaseParser):
+class FieldEntryA(ExecutableParser):
     def parse(self):
         # typeinfo_ptr is a pointer to a pointer to TypeInfo
         fields = ["unk1", "typeinfo_ptr", "offset", "name", "NumExtra"]
@@ -724,13 +555,13 @@ class FieldEntryA(BaseParser):
         self.logger.debug(self)
 
 
-class FieldEntryB(BaseParser):
+class FieldEntryB(ExecutableParser):
     def parse(self):
         fields = ["offset", "type_index", "name"]
         self.parse_fields("IHp", fields)
 
 
-class TypeInfo(BaseParser):
+class TypeInfo(ExecutableParser):
     def parse(self):
         fields = ["Type", "Name"]
         self.parse_fields("Bp", fields)
@@ -820,7 +651,7 @@ class TypeInfo(BaseParser):
             self.logger.warning("Unknown type {}".format(data_type))
 
 
-class Type_Procedure(BaseParser):
+class Type_Procedure(ExecutableParser):
     def parse(self):
         fields = ["Flags", "CallingConvention", "unk1", "ParamCount"]
         self.parse_fields("IIIB", fields)
@@ -831,7 +662,7 @@ class Type_Procedure(BaseParser):
         )
 
 
-class Type_ProcedureParam(BaseParser):
+class Type_ProcedureParam(ExecutableParser):
     def parse(self):
         fields = ["ParamFlags", "TypeinfoPtr", "Name", "NumExtra"]
         self.parse_fields("BIpH", fields)
@@ -839,14 +670,14 @@ class Type_ProcedureParam(BaseParser):
         # TODO: NumExtra is a newer Delphi feature, does this happen in older binaries?
 
 
-class Type_ClassReference(BaseParser):
+class Type_ClassReference(ExecutableParser):
     def parse(self):
         fields = ["TypeinfoPtr"]
         self.parse_fields("I", fields)
         self.add_related(self.fields["TypeinfoPtr"]["data"], TypeInfo, dereference=True)
 
 
-class Type_Array(BaseParser):
+class Type_Array(ExecutableParser):
     def parse(self):
         fields = ["ArraySize", "ElementCount", "TypeinfoPtr"]
         self.parse_fields("III", fields)
@@ -855,13 +686,13 @@ class Type_Array(BaseParser):
         # TODO: Do newer Delphi versions have additional information here?
 
 
-class Type_Int64(BaseParser):
+class Type_Int64(ExecutableParser):
     def parse(self):
         fields = ["MinValue", "MaxValue"]
         self.parse_fields("qq", fields)
 
 
-class Type_DynamicArray(BaseParser):
+class Type_DynamicArray(ExecutableParser):
     def parse(self):
         fields = ["Size", "ElementTypePtr", "VarType"]
         self.parse_fields("III", fields)
@@ -873,7 +704,7 @@ class Type_DynamicArray(BaseParser):
         )
 
 
-class Type_tkFloat(BaseParser):
+class Type_tkFloat(ExecutableParser):
     def parse(self):
         # TODO: Float type is an enum of ftSingle (0), ftDouble, ftExtended, ftComp, ftCurr (4)
         #       which should be parsed somehow.
@@ -881,21 +712,21 @@ class Type_tkFloat(BaseParser):
         self.parse_fields("B", fields)
 
 
-class Record(BaseParser):
+class Record(ExecutableParser):
     def parse(self):
         fields = ["TypeinfoPtr", "Offset"]
         self.parse_fields("II", fields)
         self.add_related(self.fields["TypeinfoPtr"]["data"], TypeInfo, dereference=True)
 
 
-class Type_tkRecord(BaseParser):
+class Type_tkRecord(ExecutableParser):
     def parse(self):
         fields = ["RecordSize", "NumRecords"]
         self.parse_fields("II", fields)
         self.embed_many("Record", Record, self.fields["NumRecords"]["data"])
 
 
-class Type_tkSet(BaseParser):
+class Type_tkSet(ExecutableParser):
     def parse(self):
         fields = ["unk1", "TypeinfoPtr"]
         self.parse_fields("BI", fields)
@@ -903,7 +734,7 @@ class Type_tkSet(BaseParser):
         self.add_related(self.fields["TypeinfoPtr"]["data"], TypeInfo, dereference=True)
 
 
-class Type_tkMethod(BaseParser):
+class Type_tkMethod(ExecutableParser):
     def parse(self):
         fields = ["MethodType", "ParamCount"]
         self.parse_fields("BB", fields)
@@ -966,7 +797,7 @@ class Type_tkMethod(BaseParser):
                 i += 1
 
 
-class Parameter(BaseParser):
+class Parameter(ExecutableParser):
     def parse(self):
         fields = ["Flags", "ParamName", "TypeName"]
         self.parse_fields("Bpp", fields)
@@ -974,7 +805,7 @@ class Parameter(BaseParser):
         # TODO: Embed parameters, Type_tkMethodParam
 
 
-class Type_tkClass(BaseParser):
+class Type_tkClass(ExecutableParser):
     def parse(self):
         fields = ["class_ptr", "parent_ptr", "unk_1", "unit_name", "num_props"]
         self.parse_fields("IIHpH", fields)
@@ -991,17 +822,17 @@ class Type_tkClass(BaseParser):
             # Add name hints for Get/Set/Stored functions.  Note these can overlap,
             # so there may be multiple
             name = "{}.{}".format(unit_name, prop.fields["name"]["data"])
-            if self.section.contains_va(prop.fields["get_proc"]["data"]):
+            if self.context.object_section.contains_va(prop.fields["get_proc"]["data"]):
                 self.add_name_hint(
                     "{}_GetProc".format(name), va=prop.fields["get_proc"]["data"]
                 )
 
-            if self.section.contains_va(prop.fields["set_proc"]["data"]):
+            if self.context.object_section.contains_va(prop.fields["set_proc"]["data"]):
                 self.add_name_hint(
                     "{}_SetProc".format(name), va=prop.fields["set_proc"]["data"]
                 )
 
-            if self.section.contains_va(prop.fields["stored_proc"]["data"]):
+            if self.context.object_section.contains_va(prop.fields["stored_proc"]["data"]):
                 self.add_name_hint(
                     "{}_StoredProc".format(name), va=prop.fields["stored_proc"]["data"]
                 )
@@ -1009,7 +840,7 @@ class Type_tkClass(BaseParser):
             i += 1
 
 
-class Type_NumberOrChar(BaseParser):
+class Type_NumberOrChar(ExecutableParser):
     def parse(self):
         fields = ["OrdinalType", "MinValue", "MaxValue"]
         self.parse_fields("BII", fields)
@@ -1017,7 +848,7 @@ class Type_NumberOrChar(BaseParser):
         # TODO: Adjust min/max based on the ordinal type!
 
 
-class Type_Enumeration(BaseParser):
+class Type_Enumeration(ExecutableParser):
     def parse(self):
         fields = ["OrdinalType", "MinValue", "MaxValue", "BaseTypePtr"]
         self.parse_fields("BIII", fields)
@@ -1040,7 +871,7 @@ class Type_Enumeration(BaseParser):
         # Get VA of this object
         # TODO: Use of -4 here is a nasty fix, we should instead defererence BaseTypePtr
         #       and see if it matches.
-        va = self.section.va_from_offset(topmost.start) - 4
+        va = self.context.object_section.va_from_offset(topmost.start) - 4
         self.logger.debug(
             "va is: {:08x} and basetype is {:08x}".format(
                 va, self.fields["BaseTypePtr"]["data"]
@@ -1070,7 +901,7 @@ class Type_Enumeration(BaseParser):
             pass
 
 
-class Type_Interface(BaseParser):
+class Type_Interface(ExecutableParser):
     def parse(self):
         fields = ["ParentPtr", "Flags", "Guid", "UnitName", "NumProperties"]
         self.parse_fields("IBGpI", fields)
@@ -1080,7 +911,7 @@ class Type_Interface(BaseParser):
         # TODO: Enumerate properties - find a sample with tkInterface type information
 
 
-class Type_Pointer(BaseParser):
+class Type_Pointer(ExecutableParser):
     def parse(self):
         fields = ["TypePtr"]
         self.parse_fields("I", fields)
@@ -1088,7 +919,7 @@ class Type_Pointer(BaseParser):
         # TODO: Add related type TypePtr
 
 
-class Property(BaseParser):
+class Property(ExecutableParser):
     def parse(self):
         fields = [
             "parent_ptr",
@@ -1108,7 +939,7 @@ class Property(BaseParser):
         #       and virtual methods are stored.
 
 
-class DynamicTable(BaseParser):
+class DynamicTable(ExecutableParser):
     def parse(self):
         fields = ["num_entries"]
         self.parse_fields("H", fields)
@@ -1128,7 +959,7 @@ class DynamicTable(BaseParser):
             i += 1
 
 
-class TypeTable(BaseParser):
+class TypeTable(ExecutableParser):
     def parse(self):
         fields = ["num_entries"]
         self.parse_fields("H", fields)
@@ -1140,13 +971,13 @@ class TypeTable(BaseParser):
             i += 1
 
 
-class InterfaceTable(BaseParser):
+class InterfaceTable(ExecutableParser):
     def parse(self):
         self.parse_fields("I", ["NumEntries"])
         self.embed_many("Interface", InterfaceEntry, self.fields["NumEntries"]["data"])
 
 
-class InterfaceEntry(BaseParser):
+class InterfaceEntry(ExecutableParser):
     def parse(self):
         fields = ["Guid", "VtablePtr", "Offset", "GetterPtr"]
         self.parse_fields("GIII", fields)
@@ -1164,7 +995,7 @@ class InterfaceEntry(BaseParser):
 
 
 # Seems likely this is just a TypeInfo fixed to tkRecord
-class InitialisationTable(BaseParser):
+class InitialisationTable(ExecutableParser):
     def parse(self):
 
         # Taken from Igor's script
@@ -1177,7 +1008,7 @@ class InitialisationTable(BaseParser):
         )
 
 
-class InitialisationField(BaseParser):
+class InitialisationField(ExecutableParser):
     def parse(self):
 
         fields = ["FieldTypePtr", "FieldOffset"]
@@ -1187,21 +1018,28 @@ class InitialisationField(BaseParser):
             self.fields["FieldTypePtr"]["data"], TypeInfo, dereference=True
         )
 
+
 class RequiredUnit(BaseParser):
     def parse(self):
         fields = ["HashCode", "Name"]
         self.parse_fields("Bs")
+
 
 class ContainedUnit(BaseParser):
     def parse(self):
         fields = ["Flags", "HashCode", "Name"]
         self.parse_fields("BBs")
 
+
 class PackageInfo(BaseParser):
     def parse(self):
         fields = ["Flags", "RequiresCount"]
         self.parse_fields("II", fields)
-        self.embed_many("RequiredUnit", RequiredUnit, self.fields["RequiresCount"]["data"])
+        self.embed_many(
+            "RequiredUnit", RequiredUnit, self.fields["RequiresCount"]["data"]
+        )
 
-        self.parse_fields("I", [ "ContainsCount"] )
-        self.embed_many("ContainedUnit", ContainedUnit, self.fields["ContainsCount"]["data"])
+        self.parse_fields("I", ["ContainsCount"])
+        self.embed_many(
+            "ContainedUnit", ContainedUnit, self.fields["ContainsCount"]["data"]
+        )

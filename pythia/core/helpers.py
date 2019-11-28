@@ -63,7 +63,6 @@ class PackageInfoHelper(Helper):
         # TODO: Move to a static function that can be called from anywhere
         self.logger = logging.getLogger("pythia.{}".format(self.__class__.__name__))
 
-
     # TODO: This should return a collection of objects, e.g. PackageInfo for both
     #       required and contained units.
     def from_bytes(self, data):
@@ -214,7 +213,9 @@ class UnitInitHelper(Helper):
         """
         # TODO: Also pass the work queue here, so additional items can be
         #       added for parsing
-        init_table = UnitTable(section, va, context=context)
+        init_table = UnitTable(
+            section.stream_data, section.offset_from_va(va), context=context
+        )
         return init_table
 
     # TODO: Consider allowing only brute force mechanism, so the code can run without Capstone
@@ -252,8 +253,6 @@ class VersionHelper(Helper):
         25: {"name": "Delphi 10.2 Tokyo", "ver": "VER320"},
         26: {"name": "Delphi 10.3 Rio", "ver": "VER330"},
     }
-    minimum = None
-    maximum = None
 
     def __init__(self, context):
         super().__init__()
@@ -299,6 +298,7 @@ class VersionHelper(Helper):
         # around XE7, which matches rules from Detect It Easy.
         rdata = self._context.get_section(".rdata")
         if rdata is None:
+            # A missing .rdata section may imply the executable has been packed
             self.logger.error(
                 "Did not find a section named .rdata, this is not typical for Delphi"
             )
@@ -308,7 +308,7 @@ class VersionHelper(Helper):
             #
             # Embarcadero Delphi for Win32 compiler version 28.0 (21.0.17707.5020)
             pattern = re.compile(
-                b"Embarcadero Delphi for Win32 compiler version \d\d\.\d \((\d\d)\."
+                br"Embarcadero Delphi for Win32 compiler version \d\d\.\d \((\d\d)\."
             )
             result = pattern.search(rdata.mapped_data)
             if result:
