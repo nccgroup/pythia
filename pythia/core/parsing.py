@@ -84,21 +84,22 @@ class BaseParser:
                 data = str(UUID(bytes_le=buf))
 
             elif f == "s":
-                i = 0
+                ascii_string = []
+                raw_length = 0
 
                 # TODO: Allow caller to specify max length and whether to pad
-                while i < 255:
-                    ascii_string = []
-                    buf = self.stream.read(1)
+                while raw_length < 255:
+                    raw_length += 1
+                    buf = self.stream.read(1).decode("utf-8")
+
                     if buf == "\x00":
                         break
                     elif buf not in string.printable:
                         raise Exception("Found non-ASCII character in string")
 
                     ascii_string.append(buf)
-                    i += 1
 
-                size = len(buf)
+                size = raw_length
                 data = "".join(ascii_string)
 
             elif f == "p":

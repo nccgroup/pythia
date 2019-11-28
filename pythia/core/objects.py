@@ -1022,13 +1022,13 @@ class InitialisationField(ExecutableParser):
 class RequiredUnit(BaseParser):
     def parse(self):
         fields = ["HashCode", "Name"]
-        self.parse_fields("Bs")
+        self.parse_fields("Bs", fields)
 
 
 class ContainedUnit(BaseParser):
     def parse(self):
         fields = ["Flags", "HashCode", "Name"]
-        self.parse_fields("BBs")
+        self.parse_fields("BBs", fields)
 
 
 class PackageInfo(BaseParser):

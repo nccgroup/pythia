@@ -4,10 +4,10 @@ Various helpers to provide utility functions which can also be used from other c
 import logging
 import pefile
 import re
+from io import BytesIO
 from binascii import unhexlify
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 from capstone.x86 import X86_OP_REG, X86_OP_IMM
-from .structures import packageinfo
 from .objects import UnitTable, PackageInfo
 from .utils import unpack_stream
 
@@ -67,14 +67,11 @@ class PackageInfoHelper(Helper):
     #       required and contained units.
     def from_bytes(self, data):
         """
-        Convert a stream of bytes to a dictionary representation of the
-        structure.
+        Parse the raw PackageInfo resource.
         """
-
         # Docs for TPackageInfoHeader at:
         # https://github.com/Fr0sT-Brutal/Delphi_MiniRTL/blob/master/SysUtils.pas#L20087
-        # TODO: Replace this with a parser module
-        info = packageinfo.parse(data)
+        info = PackageInfo(BytesIO(data), 0, None)
         self.logger.debug(info)
 
 

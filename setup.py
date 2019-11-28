@@ -28,7 +28,6 @@ setuptools.setup(
     ],
     install_requires=[
         'capstone',
-        'construct',
         'pefile',
         'PyYAML',
         'treelib',
