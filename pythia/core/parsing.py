@@ -1,3 +1,4 @@
+import io
 import logging
 import string
 from collections import OrderedDict
@@ -7,11 +8,15 @@ from uuid import UUID
 from .utils import extract_pascal_string, unpack_stream
 
 
+class ValidationError(Exception):
+    pass
+
+
 class BaseParser:
 
     # TODO: Consider adding "relations", that can easily be enumerated
     # TODO: Refactor work queue into context, it's not relevant to the generic base class
-    def __init__(self, stream, start_address, context, work_queue=None, parent=None):
+    def __init__(self, stream, start_address=None, context=None, work_queue=None, parent=None):
         """
 
         :param stream:
@@ -27,6 +32,10 @@ class BaseParser:
 
         # If provided, parsers can append to the work queue, e.g. position & type of other items
         self.work_queue = work_queue
+
+        # If no start address is passed, use the current position in the stream
+        if start_address is None:
+            start_address = stream.tell()
 
         self.start = start_address
         self.offset = start_address
@@ -56,6 +65,23 @@ class BaseParser:
         name = f"{self.__module__}.{self.__class__.__qualname__}"
         self.logger = logging.getLogger(name)
 
+    def stream_length(self):
+        """
+        Obtain the length of the underlying data stream.  This function will seek to obtain the
+        length, but restores the current position.
+
+        :return: length of self.stream (integer)
+        """
+        current_pos = self.stream.tell()
+        self.stream.seek(0, io.SEEK_END)
+        length = self.stream.tell()
+        self.stream.seek(current_pos, io.SEEK_SET)
+
+        return length
+
+    def parse_field(self, format, name):
+        self.parse_fields(format, [ name ])
+
     def parse_fields(self, format, names):
 
         # TODO: Take an optional start position - right now this assumes all reads are from the last position
@@ -68,6 +94,11 @@ class BaseParser:
 
         if not all(c in valid for c in format):
             raise ValueError("Invalid format string")
+
+        # TODO: Validate the names are unique
+        for name in names:
+            if name in self.fields:
+                raise ValueError(f"Key {name} already exists, can't add another with the same name")
 
         if len(format) != len(names):
             raise ValueError("Format string length and number of names should match")

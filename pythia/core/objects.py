@@ -1,12 +1,8 @@
 import io
-from .parsing import BaseParser
+from .parsing import BaseParser, ValidationError
 from .utils import *
 
 # TODO: Change naming to be more pythonic, away from Type_tkMethod etc.
-
-
-class ValidationError(Exception):
-    pass
 
 
 class Section:
