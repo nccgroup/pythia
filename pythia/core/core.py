@@ -112,7 +112,7 @@ class DelphiProgram(object):
     def iter_items(self, obj_type=None):
         for va, obj in self.items.items():
             if not obj_type:
-                yield obk
+                yield obj
             elif type(obj) == obj_type:
                 yield obj
 
