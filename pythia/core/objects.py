@@ -155,6 +155,13 @@ class ExecutableParser(BaseParser):
 
         self.context.add_name_hint(va, name)
 
+    def add_field(self, name, data, data_type, offset, size):
+        """
+        Extend the default field creation method and add virtual address to the record.
+        """
+        super().add_field(name, data, data_type, offset, size)
+        self.fields[name]["va"] = self.context.object_section.va_from_offset(offset)
+
     def __str__(self):
         return super().__str__(offset=self.context.object_section.load_address)
 
@@ -366,7 +373,7 @@ class Vftable(ExecutableParser):
         i = 0
         while i < num_methods:
             i += 1
-            field_name = "method_ptr_{}".format(i)
+            field_name = "MethodPtr[{}]".format(i)
             self.parse_fields("I", [field_name])
 
             name = "{}.method{}".format(self.name, i)

@@ -213,6 +213,7 @@ class PEHandler(object):
                     work_queue=self.work_queue,
                 )
                 self.context.add_item(item["location"], obj)
+                self.logger.debug("Parsed a new item at %08x", item["location"])
                 self.logger.debug(obj)
 
             except ValidationError:
@@ -268,9 +269,11 @@ class PEHandler(object):
             self.logger.warning("Found more than 10k RTTI items, stopped parsing!")
 
         # Step 6 - resolve object inheritance
+        self.logger.info("Step 6: calculating object hierarchy")
         self._calculate_object_hierarchy()
 
         # Step 7 - identify method inheritance and add name hints
+        self.logger.info("Step 7: determining method inheritance")
         tobject = self.context.get_class("TObject")
         if tobject:
             self._process_class_methods(tobject)
@@ -298,7 +301,7 @@ class PEHandler(object):
 
             elif obj.name != "TObject":
                 # All objects except the top level should have a parent
-                self.logger.warning("Object {} does not have a parent, potential bug")
+                self.logger.warning("Object %s does not have a parent, potential bug", obj.name)
 
     def _process_class_methods(self, obj, seen=None, depth=0):
 
