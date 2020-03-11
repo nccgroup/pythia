@@ -1,6 +1,7 @@
 from __future__ import print_function
-import idaapi
 import json
+import idaapi
+
 
 print("[+] Loading RTTI information from JSON file")
 
@@ -10,57 +11,52 @@ with open("output.json", "r") as fh:
 print("[+] Finished loading, starting to rename")
 
 for item in data["items"]:
-    MakeComm(item['va'], item['name'].encode("ascii"))
+    ida_bytes.del_items(item["va"], ida_bytes.DELIT_SIMPLE, item["size"])
+    idc.set_cmt(item['va'], item['name'], 0)
 
     # A short Pascal string (1 byte length, ASCII data, no null terminator).
     # Note it seems these can be UTF in modern Delphi, e.g. object names.
     if item["type"] == "p":
-        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
-        idaapi.make_ascii_string(item["va"], item["size"], ASCSTR_PASCAL)
+        ret = ida_bytes.create_strlit(item["va"], item["size"], ida_nalt.STRTYPE_PASCAL)
     
     # 4 byte integer value
     elif item["type"] == "I":
-        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
-        MakeDword(item["va"])
+        ida_bytes.create_data(item["va"], FF_DWORD, 4, ida_idaapi.BADADDR)
 
     # 2 byte integer value
     elif item["type"] == "H":
-        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
-        MakeWord(item["va"])
+        ida_bytes.create_data(item["va"], FF_WORD, 2, ida_idaapi.BADADDR)
 
     # 1 byte value, either integer or a single byte
     elif item["type"] == "B":
-        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
-        MakeByte(item["va"])
+        ida_bytes.create_data(item["va"], FF_BYTE, 1, ida_idaapi.BADADDR)
 
     # GUID, custom format
     elif item["type"] == "G":
-        MakeUnknown(item["va"], item["size"], DOUNK_SIMPLE)
-        MakeDword(item["va"])
-        MakeWord(item["va"] + 4)
-        MakeWord(item["va"] + 6)
-        MakeWord(item["va"] + 8)
-        MakeData(item["va"] + 10, FF_BYTE, 6, 0)
-
+        ida_bytes.create_data(item["va"], FF_DWORD, 4, ida_idaapi.BADADDR)
+        ida_bytes.create_data(item["va"] + 4, FF_WORD, 2, ida_idaapi.BADADDR)
+        ida_bytes.create_data(item["va"] + 6, FF_WORD, 2, ida_idaapi.BADADDR)
+        ida_bytes.create_data(item["va"] + 8, FF_WORD, 2, ida_idaapi.BADADDR)
+        ida_bytes.create_data(item["va"] + 10, FF_BYTE, 6, ida_idaapi.BADADDR)
+        	
         comm = "GUID: {}".format(item["data"])
-        MakeComm(item['va'], comm)
+        idc.set_cmt(item['va'], comm, 0)
 
 seen = set()
 for item in data["name_hints"]:
     if item["va"] in seen:
-        print("Already renamed 0x{:08x}".format(item["va"]))
-        comm = Comment(item["va"])
+        #print("Already renamed 0x{:08x}".format(item["va"]))
+        comm = idc.get_cmt(item["va"], 0)
         if comm:
             comm += "\n{}".format(item["name"])
         else:
             comm = item["name"]
-        MakeComm(item["va"], str(comm))
+        idc.set_cmt(item["va"], str(comm), 0)
         continue
         
-    MakeNameEx(item["va"], str(item["name"]), SN_NOWARN)
+    idc.set_name(item["va"], str(item["name"]), SN_NOWARN)
     seen.add(item["va"])
 
-print("[+] Finished renaming")
-
-# This seems to occasionally crash IDA, figure out why before uncommenting
-#idaapi.refresh_strlist(0, 1)
+print("[+] Finished renaming, rebuilding IDA's string list")
+ida_strlist.build_strlist()
+print("[+] Done!")
